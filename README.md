@@ -131,19 +131,18 @@ overwrite `exp/wavlm_finetune_10h`; reproducibility settings are in
 
 ## 8. RTX 3090 Linux migration
 
-After activating the `ssl_asr` environment on a 24GB RTX 3090 server, run
-E2 through E4 sequentially with an effective batch size of 16:
+After activating the `ssl_asr` environment on a 24GB RTX 3090 server, the
+script now starts at E4 by default because E2 and E3 are complete:
 
 ```bash
 bash scripts/train_e2_e4_rtx3090.sh
 ```
 
-To continue after a previously completed and inspected experiment, start at
-E3 or E4:
+To explicitly rerun from E2 or E3:
 
 ```bash
+bash scripts/train_e2_e4_rtx3090.sh e2
 bash scripts/train_e2_e4_rtx3090.sh e3
-bash scripts/train_e2_e4_rtx3090.sh e4
 ```
 
 The script uses train/eval batch size 2, gradient accumulation 8, and zero

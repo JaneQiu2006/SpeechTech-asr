@@ -110,7 +110,7 @@ python scripts/train_ctc.py `
 
 ## 2026-07-01：E2 Wav2Vec2 fine-tune 10h
 
-状态：修复配置与 1000-step 启动验证完成；修复后的正式训练待执行。
+状态：远程正式训练与 dev 指标完成；完整远程 checkpoint 尚未同步到本地。
 
 ### 配置完成
 
@@ -144,11 +144,8 @@ python scripts/train_ctc.py `
 ### 正式训练
 
 首次 3-epoch 正式训练已完成但发生输出塌缩，结果已归档为
-`wav2vec2_finetune_10h_failed_3ep`。修复后的 30-epoch 正式训练尚未执行；
-成功后才会重新生成
-`exp/wav2vec2_finetune_10h/`、
-`results/predictions/wav2vec2_finetune_10h_dev.jsonl`，并向
-`results/metrics.csv` 追加 E2 记录。
+`wav2vec2_finetune_10h_failed_3ep`。修复后的正式训练已在远程服务器完成，
+dev prediction 已导入本地并完成指标修复；完整远程 checkpoint 尚未同步。
 
 ### 首次正式训练结果与修复
 
@@ -172,6 +169,25 @@ python scripts/train_ctc.py `
 - 1000-step 验证产物保存在
   `exp/wav2vec2_finetune_overfit_validation_1000steps/` 和独立 metrics
   文件中，未写入正式 `results/metrics.csv`。
+
+### 远程正式训练结果导入与评估修复
+
+- 已导入远程正式 E2 dev prediction，共 2513 条，与15秒过滤后的
+  `dev_clean.jsonl` ID、顺序完全一致，无缺失、重复或空预测。
+- 发现 Trainer 跨 batch 拼接不同长度 logits 时用 `-100` 补齐；旧代码对
+  全 `-100` 帧直接 argmax，错误产生 ID 0 apostrophe。2509 条预测因此
+  带有人为末尾 apostrophe。
+- 训练入口现将全 `-100` padded frames 映射为 CTC blank 后再解码，并增加
+  单元测试覆盖该行为。
+- 原始导入文件保留为
+  `results/predictions/wav2vec2_finetune_10h_dev_raw_padding_bug.jsonl`；
+  正式 prediction 已移除2509个伪尾字符，并将2513个远程音频路径
+  重定位到本地数据。
+- 修正后 dev WER 0.11092、CER 0.03301，已向 `results/metrics.csv`
+  追加正式 `wav2vec2_finetune_10h` 记录。
+- 本地 `exp/wav2vec2_finetune_10h/` 目前仅含 step 126/252 的未完成旧
+  checkpoint（计划总步数3780），不视为远程正式 E2 模型；完整远程
+  checkpoint 仍需另行同步。
 
 ## 2026-07-01：E3 Wav2Vec2 fine-tune 1h
 
@@ -249,6 +265,8 @@ python scripts/train_ctc.py `
   与数据和模型无关。训练入口新增 `--disable_cudnn`；3090 脚本在 cuDNN
   预检失败时自动验证并切换到原生 CUDA FP16 Conv1d。
 - 支持从 `e2`、`e3` 或 `e4` 开始，便于中断后继续后续实验。
+- E2/E3 完成后，默认起点已改为 `e4`；仍可显式传入 `e2` 或 `e3`
+  进行重跑。
 - 每项实验写入独立 `logs/*_rtx3090.log`，并拒绝覆盖已有 experiment
   目录或 prediction 文件。
 - 已通过 Bash 静态语法检查；未在本机占用中的 GPU 上启动服务器配置训练。

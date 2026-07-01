@@ -5,11 +5,11 @@ set -euo pipefail
 #
 # Usage:
 #   conda activate ssl_asr
-#   bash scripts/train_e2_e4_rtx3090.sh
+#   bash scripts/train_e2_e4_rtx3090.sh  # E4 only; E2 and E3 are complete
 #
-# Resume at a later experiment after inspecting earlier output:
+# Explicitly rerun from an earlier experiment if needed:
+#   bash scripts/train_e2_e4_rtx3090.sh e2
 #   bash scripts/train_e2_e4_rtx3090.sh e3
-#   bash scripts/train_e2_e4_rtx3090.sh e4
 #
 # Override Python if needed:
 #   PYTHON_EXE=/path/to/python bash scripts/train_e2_e4_rtx3090.sh
@@ -22,7 +22,7 @@ cd "$PROJECT_ROOT"
 
 PYTHON_EXE="${PYTHON_EXE:-python}"
 DATA_ROOT="${DATA_ROOT:-data}"
-START_FROM="${1:-e2}"
+START_FROM="${1:-e4}"
 CUDNN_ARGS=()
 
 case "$START_FROM" in

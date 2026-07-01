@@ -142,6 +142,16 @@ class CTCDataCollator:
         return batch
 
 
+def prediction_ids_from_logits(logits: Any, blank_id: int) -> Any:
+    """Map Trainer's synthetic -100 logit padding to the CTC blank."""
+    import numpy as np
+
+    prediction_ids = np.argmax(logits, axis=-1)
+    padded_frames = np.all(logits == -100, axis=-1)
+    prediction_ids[padded_frames] = blank_id
+    return prediction_ids
+
+
 LIBRISPEECH_SPLITS = ("train-clean-100", "dev-clean", "test-clean")
 
 
@@ -341,7 +351,9 @@ def main() -> None:
     )
 
     def compute_metrics(prediction) -> dict[str, float]:
-        prediction_ids = np.argmax(prediction.predictions, axis=-1)
+        prediction_ids = prediction_ids_from_logits(
+            prediction.predictions, tokenizer.pad_token_id
+        )
         label_ids = prediction.label_ids.copy()
         label_ids[label_ids == -100] = tokenizer.pad_token_id
         predictions = processor.batch_decode(prediction_ids)
@@ -397,7 +409,9 @@ def main() -> None:
     processor.save_pretrained(args.output_dir)
 
     output = trainer.predict(eval_dataset)
-    prediction_ids = np.argmax(output.predictions, axis=-1)
+    prediction_ids = prediction_ids_from_logits(
+        output.predictions, tokenizer.pad_token_id
+    )
     label_ids = output.label_ids.copy()
     label_ids[label_ids == -100] = tokenizer.pad_token_id
     predictions = processor.batch_decode(prediction_ids)
