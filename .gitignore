@@ -13,4 +13,8 @@ data/vocab/*.json
 exp/
 results/predictions/
 results/metrics.csv
+
+
 logs/
+*.log
+"build/" 
