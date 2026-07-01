@@ -1,0 +1,10 @@
+torch>=2.2
+torchaudio>=2.2
+transformers>=4.40,<5
+datasets[audio]>=2.18
+accelerate>=0.28
+jiwer>=3.0
+soundfile>=0.12
+PyYAML>=6.0
+numpy>=1.24
+

@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# Large/reproducible artifacts
+data/
+data/**/*.flac
+data/**/*.tar.gz
+data/**/*.crdownload
+data/manifests/*.jsonl
+data/vocab/*.json
+exp/
+results/predictions/
+results/metrics.csv
+

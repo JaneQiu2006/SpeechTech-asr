@@ -1,0 +1,33 @@
+param(
+  [string]$PythonExe = "python"
+)
+
+$ErrorActionPreference = "Stop"
+
+$ProjectRoot = Split-Path -Parent $PSScriptRoot
+Set-Location $ProjectRoot
+
+if (Test-Path "exp/wavlm_finetune_10h") {
+  throw "exp/wavlm_finetune_10h already exists; refusing to overwrite it."
+}
+
+& $PythonExe -u scripts/train_ctc.py `
+  --model_name_or_path microsoft/wavlm-base `
+  --train_manifest data/manifests/train_10h.jsonl `
+  --eval_manifest data/manifests/dev_clean.jsonl `
+  --output_dir exp/wavlm_finetune_10h `
+  --prediction_path results/predictions/wavlm_finetune_10h_dev.jsonl `
+  --ctc_loss_reduction mean `
+  --ctc_zero_infinity `
+  --max_duration_in_seconds 15 `
+  --per_device_train_batch_size 1 `
+  --per_device_eval_batch_size 1 `
+  --gradient_accumulation_steps 16 `
+  --learning_rate 1e-4 `
+  --weight_decay 0.005 `
+  --warmup_ratio 0.1 `
+  --num_train_epochs 30 `
+  --save_total_limit 2 `
+  --eval_accumulation_steps 10 `
+  --fp16 `
+  --gradient_checkpointing
