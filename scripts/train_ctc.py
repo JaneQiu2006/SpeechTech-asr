@@ -48,6 +48,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataloader_num_workers", type=int, default=0)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=8)
     parser.add_argument("--learning_rate", type=float, default=3e-4)
+    parser.add_argument(
+        "--encoder_learning_rate",
+        type=float,
+        help="Optional lower learning rate for non-head trainable parameters.",
+    )
+    parser.add_argument(
+        "--encoder_freeze_steps",
+        type=int,
+        default=0,
+        help="Keep encoder optimizer groups at zero LR for the first N steps.",
+    )
     parser.add_argument("--weight_decay", type=float, default=0.0)
     parser.add_argument(
         "--warmup_ratio",
@@ -75,6 +86,25 @@ def parse_args() -> argparse.Namespace:
         help="Move evaluation predictions to CPU periodically to bound GPU memory.",
     )
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--mask_time_prob", type=float)
+    parser.add_argument("--mask_feature_prob", type=float)
+    parser.add_argument(
+        "--collapse_patience_evaluations",
+        type=int,
+        default=0,
+        help="Stop after this many consecutive near-empty evaluations; zero disables.",
+    )
+    parser.add_argument(
+        "--collapse_non_empty_threshold",
+        type=float,
+        default=0.01,
+    )
+    parser.add_argument(
+        "--diagnostic_train_samples",
+        type=int,
+        default=0,
+        help="Evaluate this many training samples after training; zero disables.",
+    )
     parser.add_argument("--fp16", action="store_true")
     parser.add_argument("--gradient_checkpointing", action="store_true")
     parser.add_argument(
@@ -220,6 +250,69 @@ def prediction_ids_from_logits(logits: Any, blank_id: int) -> Any:
     return prediction_ids
 
 
+def prediction_diagnostics(
+    logits: Any,
+    prediction_ids: Any,
+    predictions: list[str],
+    blank_id: int,
+) -> dict[str, float]:
+    """Measure blank dominance without counting Trainer's synthetic padding."""
+    import numpy as np
+
+    padded_frames = np.all(logits == -100, axis=-1)
+    valid_frames = ~padded_frames
+    valid_count = int(valid_frames.sum())
+    blank_count = int(((prediction_ids == blank_id) & valid_frames).sum())
+    non_empty = sum(bool(prediction.strip()) for prediction in predictions)
+    return {
+        "non_empty_ratio": non_empty / len(predictions) if predictions else 0.0,
+        "blank_frame_ratio": blank_count / valid_count if valid_count else 1.0,
+    }
+
+
+def optimizer_parameter_groups(
+    model: Any,
+    head_learning_rate: float,
+    encoder_learning_rate: float,
+    weight_decay: float,
+) -> list[dict[str, Any]]:
+    """Build head/encoder and decay/no-decay AdamW parameter groups."""
+    groups: dict[tuple[str, bool], list[Any]] = {
+        ("head", True): [],
+        ("head", False): [],
+        ("encoder", True): [],
+        ("encoder", False): [],
+    }
+    for name, parameter in model.named_parameters():
+        if not parameter.requires_grad:
+            continue
+        component = "head" if name.startswith("lm_head.") else "encoder"
+        use_decay = not (
+            name.endswith(".bias")
+            or name.endswith("LayerNorm.weight")
+            or name.endswith("layer_norm.weight")
+        )
+        groups[(component, use_decay)].append(parameter)
+
+    result = []
+    for (component, use_decay), parameters in groups.items():
+        if not parameters:
+            continue
+        result.append(
+            {
+                "params": parameters,
+                "lr": (
+                    head_learning_rate
+                    if component == "head"
+                    else encoder_learning_rate
+                ),
+                "weight_decay": weight_decay if use_decay else 0.0,
+                "group_name": component,
+            }
+        )
+    return result
+
+
 LIBRISPEECH_SPLITS = ("train-clean-100", "dev-clean", "test-clean")
 
 
@@ -290,6 +383,7 @@ def main() -> None:
             AutoFeatureExtractor,
             AutoModelForCTC,
             Trainer,
+            TrainerCallback,
             TrainingArguments,
             Wav2Vec2CTCTokenizer,
             Wav2Vec2Processor,
@@ -342,6 +436,21 @@ def main() -> None:
         ctc_loss_reduction=args.ctc_loss_reduction,
         ctc_zero_infinity=args.ctc_zero_infinity,
         ignore_mismatched_sizes=True,
+    )
+    for option_name in ("mask_time_prob", "mask_feature_prob"):
+        option_value = getattr(args, option_name)
+        if option_value is not None:
+            if not 0.0 <= option_value <= 1.0:
+                raise ValueError(f"--{option_name} must be between 0 and 1")
+            setattr(model.config, option_name, option_value)
+    if args.mask_time_prob == 0.0 and args.mask_feature_prob == 0.0:
+        model.config.apply_spec_augment = False
+    print(
+        "[startup] masking: "
+        f"apply_spec_augment={getattr(model.config, 'apply_spec_augment', None)}, "
+        f"mask_time_prob={getattr(model.config, 'mask_time_prob', None)}, "
+        f"mask_feature_prob={getattr(model.config, 'mask_feature_prob', None)}",
+        flush=True,
     )
 
     if args.freeze_encoder:
@@ -441,11 +550,13 @@ def main() -> None:
     eval_dataset = ManifestDataset(eval_records, processor, model.config.vocab_size)
     print(
         f"[data] train={len(train_records)} utterances, "
-        f"eval={len(eval_records)} utterances",
+        f"train_hours={sum(float(record['duration']) for record in train_records) / 3600:.3f}, "
+        f"eval={len(eval_records)} utterances, "
+        f"eval_hours={sum(float(record['duration']) for record in eval_records) / 3600:.3f}",
         flush=True,
     )
 
-    def compute_metrics(prediction) -> dict[str, float]:
+    def decode_output(prediction) -> tuple[Any, list[str], list[str]]:
         prediction_ids = prediction_ids_from_logits(
             prediction.predictions, tokenizer.pad_token_id
         )
@@ -453,7 +564,19 @@ def main() -> None:
         label_ids[label_ids == -100] = tokenizer.pad_token_id
         predictions = processor.batch_decode(prediction_ids)
         references = processor.batch_decode(label_ids, group_tokens=False)
-        return compute_error_rates(references, predictions)
+        return prediction_ids, references, predictions
+
+    def compute_metrics(prediction) -> dict[str, float]:
+        prediction_ids, references, predictions = decode_output(prediction)
+        return {
+            **compute_error_rates(references, predictions),
+            **prediction_diagnostics(
+                prediction.predictions,
+                prediction_ids,
+                predictions,
+                tokenizer.pad_token_id,
+            ),
+        }
 
     training_kwargs = dict(
         output_dir=str(args.output_dir),
@@ -494,6 +617,75 @@ def main() -> None:
         training_kwargs["eval_steps"] = args.eval_steps
         training_kwargs["save_steps"] = args.eval_steps
     training_args = TrainingArguments(**training_kwargs)
+
+    encoder_learning_rate = (
+        args.encoder_learning_rate
+        if args.encoder_learning_rate is not None
+        else args.learning_rate
+    )
+    if encoder_learning_rate <= 0 or args.learning_rate <= 0:
+        raise ValueError("Learning rates must be positive")
+    if args.encoder_freeze_steps < 0:
+        raise ValueError("--encoder_freeze_steps cannot be negative")
+    optimizer = torch.optim.AdamW(
+        optimizer_parameter_groups(
+            model,
+            args.learning_rate,
+            encoder_learning_rate,
+            args.weight_decay,
+        ),
+        lr=args.learning_rate,
+    )
+    print(
+        f"[train] learning rates: head={args.learning_rate:g}, "
+        f"encoder={encoder_learning_rate:g}, "
+        f"encoder_freeze_steps={args.encoder_freeze_steps}",
+        flush=True,
+    )
+
+    class LowResourceStabilityCallback(TrainerCallback):
+        def __init__(self) -> None:
+            self.collapsed_evaluations = 0
+
+        def on_step_begin(
+            self, training_args, state, control, optimizer=None, lr_scheduler=None, **kwargs
+        ):
+            if optimizer is None or args.freeze_encoder:
+                return control
+            scheduled_lrs = (
+                lr_scheduler.get_last_lr() if lr_scheduler is not None else None
+            )
+            for index, group in enumerate(optimizer.param_groups):
+                if group.get("group_name") != "encoder":
+                    continue
+                if state.global_step < args.encoder_freeze_steps:
+                    group["lr"] = 0.0
+                elif scheduled_lrs is not None:
+                    group["lr"] = scheduled_lrs[index]
+            return control
+
+        def on_evaluate(self, training_args, state, control, metrics=None, **kwargs):
+            if args.collapse_patience_evaluations <= 0 or metrics is None:
+                return control
+            non_empty_ratio = float(metrics.get("eval_non_empty_ratio", 1.0))
+            if non_empty_ratio <= args.collapse_non_empty_threshold:
+                self.collapsed_evaluations += 1
+            else:
+                self.collapsed_evaluations = 0
+            print(
+                f"[diagnostic] step={state.global_step}, "
+                f"non_empty_ratio={non_empty_ratio:.4f}, "
+                f"collapsed_evaluations={self.collapsed_evaluations}",
+                flush=True,
+            )
+            if self.collapsed_evaluations >= args.collapse_patience_evaluations:
+                print(
+                    "[diagnostic] stopping after consecutive collapsed evaluations",
+                    flush=True,
+                )
+                control.should_training_stop = True
+            return control
+
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -501,20 +693,34 @@ def main() -> None:
         eval_dataset=eval_dataset,
         data_collator=CTCDataCollator(processor),
         compute_metrics=compute_metrics,
+        optimizers=(optimizer, None),
+        callbacks=[LowResourceStabilityCallback()],
     )
     print("[train] starting Trainer.train()", flush=True)
     trainer.train()
     trainer.save_model()
     processor.save_pretrained(args.output_dir)
 
+    if args.diagnostic_train_samples > 0:
+        diagnostic_count = min(args.diagnostic_train_samples, len(train_dataset))
+        train_output = trainer.predict(
+            torch.utils.data.Subset(train_dataset, range(diagnostic_count)),
+            metric_key_prefix="train_diagnostic",
+        )
+        print(
+            "[diagnostic] train subset: "
+            f"samples={diagnostic_count}, "
+            f"WER={train_output.metrics['train_diagnostic_wer']:.4f}, "
+            f"CER={train_output.metrics['train_diagnostic_cer']:.4f}, "
+            f"non_empty_ratio="
+            f"{train_output.metrics['train_diagnostic_non_empty_ratio']:.4f}, "
+            f"blank_frame_ratio="
+            f"{train_output.metrics['train_diagnostic_blank_frame_ratio']:.4f}",
+            flush=True,
+        )
+
     output = trainer.predict(eval_dataset)
-    prediction_ids = prediction_ids_from_logits(
-        output.predictions, tokenizer.pad_token_id
-    )
-    label_ids = output.label_ids.copy()
-    label_ids[label_ids == -100] = tokenizer.pad_token_id
-    predictions = processor.batch_decode(prediction_ids)
-    references = processor.batch_decode(label_ids, group_tokens=False)
+    _, references, predictions = decode_output(output)
     prediction_path = args.prediction_path or (
         PROJECT_ROOT / "results/predictions" / f"{args.output_dir.name}_dev.jsonl"
     )

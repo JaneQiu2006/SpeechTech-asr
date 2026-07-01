@@ -40,6 +40,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--target_hours", type=float, nargs="+", default=[1, 10])
     parser.add_argument(
+        "--max_train_duration_in_seconds",
+        type=float,
+        help=(
+            "Filter training utterances before accumulating target hours. "
+            "Use the same value as training to make nominal and effective "
+            "subset durations agree."
+        ),
+    )
+    parser.add_argument(
+        "--subset_suffix",
+        default="",
+        help="Optional suffix for generated training manifests, for example effective_15s.",
+    )
+    parser.add_argument(
         "--splits",
         nargs="+",
         choices=tuple(HF_SPLITS),
@@ -119,7 +133,10 @@ def download_hf_split(split: str, destination: Path) -> None:
 
 
 def select_duration_prefix(
-    records: list[dict], target_hours: float, seed: int
+    records: list[dict],
+    target_hours: float,
+    seed: int,
+    max_duration_in_seconds: float | None = None,
 ) -> list[dict]:
     shuffled = list(records)
     random.Random(seed).shuffle(shuffled)
@@ -127,8 +144,13 @@ def select_duration_prefix(
     selected: list[dict] = []
     duration = 0.0
     for record in shuffled:
+        if (
+            max_duration_in_seconds is not None
+            and float(record["duration"]) > max_duration_in_seconds
+        ):
+            continue
         selected.append(record)
-        duration += record["duration"]
+        duration += float(record["duration"])
         if duration >= target_seconds:
             break
     if duration < target_seconds:
@@ -156,10 +178,35 @@ def main() -> None:
 
     train_records = all_records.get("train-clean-100")
     if train_records:
+        subset_records = train_records
+        if args.max_train_duration_in_seconds is not None:
+            if args.max_train_duration_in_seconds <= 0:
+                raise ValueError("--max_train_duration_in_seconds must be positive")
+            subset_records = [
+                record
+                for record in train_records
+                if float(record["duration"]) <= args.max_train_duration_in_seconds
+            ]
+            filtered_hours = sum(
+                float(record["duration"]) for record in subset_records
+            ) / 3600
+            print(
+                f"[filter] train <= {args.max_train_duration_in_seconds:g}s: "
+                f"{len(subset_records)} utterances, {filtered_hours:.3f}h"
+            )
+        suffix = f"_{args.subset_suffix.strip('_')}" if args.subset_suffix else ""
         for hours in sorted(set(args.target_hours)):
-            subset = select_duration_prefix(train_records, hours, args.seed)
+            # Shuffle the complete source first, then skip ineligible records.
+            # This preserves nesting with legacy subsets made from the same
+            # seed while ensuring only usable speech counts toward the target.
+            subset = select_duration_prefix(
+                train_records,
+                hours,
+                args.seed,
+                args.max_train_duration_in_seconds,
+            )
             label = f"{hours:g}".replace(".", "p")
-            output = args.manifest_dir / f"train_{label}h.jsonl"
+            output = args.manifest_dir / f"train_{label}h{suffix}.jsonl"
             write_jsonl(output, subset)
             actual = sum(record["duration"] for record in subset) / 3600
             print(f"[write] {output}: {len(subset)} utterances, {actual:.3f}h")

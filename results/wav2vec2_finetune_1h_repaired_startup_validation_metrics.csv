@@ -1,0 +1,2 @@
+experiment,split,model,freeze_encoder,num_samples,wer,cer,total_params,trainable_params
+wav2vec2_finetune_1h_repaired_startup_validation,dev_clean,facebook/wav2vec2-base,False,8,1.0,1.6566037735849057,94394782,90194334

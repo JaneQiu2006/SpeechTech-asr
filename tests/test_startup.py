@@ -86,3 +86,34 @@ def test_trainer_logit_padding_decodes_as_ctc_blank():
     )
     prediction_ids = module.prediction_ids_from_logits(logits, blank_id=2)
     assert prediction_ids.tolist() == [[1, 2]]
+
+
+def test_prediction_diagnostics_ignore_trainer_padding():
+    import numpy as np
+
+    from scripts.train_ctc import prediction_diagnostics
+
+    logits = np.array(
+        [[[0.1, 0.9, 0.0], [0.0, 0.1, 0.9], [-100.0, -100.0, -100.0]]],
+        dtype=np.float32,
+    )
+    prediction_ids = np.array([[1, 2, 2]])
+    diagnostics = prediction_diagnostics(logits, prediction_ids, ["a"], blank_id=2)
+    assert diagnostics == {"non_empty_ratio": 1.0, "blank_frame_ratio": 0.5}
+
+
+def test_filtered_duration_subset_reaches_effective_target_and_is_deterministic():
+    from scripts.prepare_librispeech_subsets import select_duration_prefix
+
+    records = [{"id": str(index), "duration": 900.0} for index in range(6)]
+    records.append({"id": "too-long", "duration": 1800.0})
+    first = select_duration_prefix(
+        records, target_hours=1.0, seed=42, max_duration_in_seconds=1000
+    )
+    second = select_duration_prefix(
+        records, target_hours=1.0, seed=42, max_duration_in_seconds=1000
+    )
+    assert first == second
+    assert len(first) == 4
+    assert all(record["id"] != "too-long" for record in first)
+    assert sum(record["duration"] for record in first) == 3600.0

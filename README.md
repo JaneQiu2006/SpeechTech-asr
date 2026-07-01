@@ -102,16 +102,26 @@ head to leave its collapsed-output phase.
 
 ## 6. Fine-tuned 1h low-resource experiment (E3)
 
-E3 uses the nested 1h training subset with the same model and freezing policy
-as corrected E2. Because only 184 utterances remain after the 15-second
-filter, it trains for 1000 optimizer steps and evaluates every 100 steps:
+The original E3 collapsed because its nominal 1h manifest contained only
+0.591h after the 15-second training filter. Generate a nested manifest whose
+duration is accumulated after filtering:
+
+```powershell
+python scripts/prepare_librispeech_subsets.py --local_only --splits train-clean-100 --target_hours 1 --max_train_duration_in_seconds 15 --subset_suffix effective_15s
+```
+
+The repaired E3 trains on one effective hour. It uses a `1e-4` CTC-head
+learning rate, a `2e-5` encoder learning rate, delays encoder updates for 100
+steps, disables masking, reloads the best dev-WER checkpoint, and stops after
+eight consecutive near-empty evaluations:
 
 ```powershell
 conda activate ssl_asr
 powershell -ExecutionPolicy Bypass -File scripts/train_wav2vec2_finetune_1h.ps1
 ```
 
-The script refuses to overwrite `exp/wav2vec2_finetune_1h`. Its complete
+The script refuses to overwrite `exp/wav2vec2_finetune_1h_repaired`, so the
+collapsed run is retained for diagnosis. Its complete
 settings are in `configs/wav2vec2_finetune_1h.yaml`.
 
 ## 7. WavLM 10h model comparison (E4)

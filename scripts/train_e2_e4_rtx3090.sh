@@ -89,13 +89,13 @@ run_e2() {
 }
 
 run_e3() {
-  local output_dir="exp/wav2vec2_finetune_1h"
-  local prediction_path="results/predictions/wav2vec2_finetune_1h_dev.jsonl"
+  local output_dir="exp/wav2vec2_finetune_1h_repaired"
+  local prediction_path="results/predictions/wav2vec2_finetune_1h_repaired_dev.jsonl"
   require_new_output "$output_dir" "$prediction_path"
 
   "$PYTHON_EXE" -u scripts/train_ctc.py \
     --model_name_or_path facebook/wav2vec2-base \
-    --train_manifest data/manifests/train_1h.jsonl \
+    --train_manifest data/manifests/train_1h_effective_15s.jsonl \
     --eval_manifest data/manifests/dev_clean.jsonl \
     --data_root "$DATA_ROOT" \
     --output_dir "$output_dir" \
@@ -106,14 +106,22 @@ run_e3() {
     --per_device_train_batch_size 2 \
     --per_device_eval_batch_size 2 \
     --dataloader_num_workers 0 \
-    --gradient_accumulation_steps 8 \
-    --max_steps 1000 \
+    --gradient_accumulation_steps 4 \
+    --max_steps 1500 \
     --eval_steps 100 \
     --learning_rate 1e-4 \
+    --encoder_learning_rate 2e-5 \
+    --encoder_freeze_steps 100 \
     --weight_decay 0.005 \
     --warmup_ratio 0.1 \
-    --save_total_limit 2 \
+    --mask_time_prob 0 \
+    --mask_feature_prob 0 \
+    --load_best_model_at_end \
+    --save_total_limit 5 \
     --eval_accumulation_steps 10 \
+    --collapse_patience_evaluations 8 \
+    --collapse_non_empty_threshold 0.01 \
+    --diagnostic_train_samples 400 \
     --fp16 \
     --gradient_checkpointing \
     "${CUDNN_ARGS[@]}" \
@@ -152,7 +160,7 @@ run_e4() {
 }
 
 require_file scripts/train_ctc.py
-require_file data/manifests/train_1h.jsonl
+require_file data/manifests/train_1h_effective_15s.jsonl
 require_file data/manifests/train_10h.jsonl
 require_file data/manifests/dev_clean.jsonl
 require_file data/vocab/vocab.json

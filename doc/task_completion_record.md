@@ -257,6 +257,24 @@ blank-output collapse，完整远程 checkpoint 与训练日志尚未同步。
 - 当前结果不能作为有效的 1h vs 10h 数据规模消融结论；需同步远程
   trainer state、训练曲线和 checkpoint，检查中间 checkpoint 或调整配置重跑。
 
+### E3 修复配置（待 GPU 重跑）
+
+- 新增过滤后再累计时长的
+  `data/manifests/train_1h_effective_15s.jsonl`，实际为 1.000h；旧
+  `train_1h.jsonl` 和失败结果均保留。
+- 修复实验使用独立目录 `exp/wav2vec2_finetune_1h_repaired`，不会覆盖原 E3。
+- CTC head / encoder 学习率分别为 `1e-4` / `2e-5`；前 100 steps 暂停
+  encoder 更新，有效 batch 从 16 降至 8。
+- 显式关闭 time/feature masking，按 dev WER 恢复最佳 checkpoint，并保留
+  5 个 checkpoint。
+- 每次评估记录非空预测比例和帧级 blank 比例；连续 8 次评估的非空比例
+  不超过 1% 时自动停止。训练结束后在训练子集上计算诊断 WER/CER。
+- 已使用 16 条训练样本、8 条 dev 样本和 1 个 optimizer step 完成 RTX
+  4060 启动验证。分层 optimizer、encoder 更新延迟、masking 关闭、最佳
+  checkpoint 恢复、blank/non-empty 指标以及训练子集诊断均正常执行；产物
+  隔离在 `exp/wav2vec2_finetune_1h_repaired_startup_validation/` 和独立
+  metrics 文件中。
+
 ## 2026-07-01：E4 WavLM fine-tune 10h
 
 状态：远程正式训练与 dev prediction 已完成并导入本地；完整远程
