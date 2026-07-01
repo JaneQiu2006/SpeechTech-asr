@@ -284,6 +284,18 @@ def main() -> None:
     ):
         raise RuntimeError("Fine-tune mode does not have a trainable Transformer encoder")
 
+    if args.gradient_checkpointing:
+        model.gradient_checkpointing_enable()
+        base_model = getattr(model, getattr(model, "base_model_prefix", ""), None)
+        feature_encoder = getattr(base_model, "feature_extractor", None)
+        if feature_encoder is None:
+            raise RuntimeError(
+                "Could not identify the CNN feature encoder for checkpointing control"
+            )
+        for module in feature_encoder.modules():
+            if hasattr(module, "gradient_checkpointing"):
+                module.gradient_checkpointing = False
+
     total_params = sum(parameter.numel() for parameter in model.parameters())
     trainable_params = sum(
         parameter.numel() for parameter in model.parameters() if parameter.requires_grad
@@ -336,7 +348,9 @@ def main() -> None:
         num_train_epochs=args.num_train_epochs,
         max_steps=args.max_steps,
         fp16=args.fp16,
-        gradient_checkpointing=args.gradient_checkpointing,
+        # Checkpointing is enabled above so the frozen CNN can be excluded.
+        # Letting Trainer enable it globally would checkpoint the CNN again.
+        gradient_checkpointing=False,
         logging_steps=10,
         save_total_limit=args.save_total_limit,
         eval_accumulation_steps=args.eval_accumulation_steps,

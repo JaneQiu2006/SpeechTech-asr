@@ -70,10 +70,10 @@ run_e2() {
     --ctc_loss_reduction mean \
     --ctc_zero_infinity \
     --max_duration_in_seconds 15 \
-    --per_device_train_batch_size 4 \
-    --per_device_eval_batch_size 4 \
-    --dataloader_num_workers 4 \
-    --gradient_accumulation_steps 4 \
+    --per_device_train_batch_size 2 \
+    --per_device_eval_batch_size 2 \
+    --dataloader_num_workers 0 \
+    --gradient_accumulation_steps 8 \
     --learning_rate 1e-4 \
     --weight_decay 0.005 \
     --warmup_ratio 0.1 \
@@ -100,10 +100,10 @@ run_e3() {
     --ctc_loss_reduction mean \
     --ctc_zero_infinity \
     --max_duration_in_seconds 15 \
-    --per_device_train_batch_size 4 \
-    --per_device_eval_batch_size 4 \
-    --dataloader_num_workers 4 \
-    --gradient_accumulation_steps 4 \
+    --per_device_train_batch_size 2 \
+    --per_device_eval_batch_size 2 \
+    --dataloader_num_workers 0 \
+    --gradient_accumulation_steps 8 \
     --max_steps 1000 \
     --eval_steps 100 \
     --learning_rate 1e-4 \
@@ -131,10 +131,10 @@ run_e4() {
     --ctc_loss_reduction mean \
     --ctc_zero_infinity \
     --max_duration_in_seconds 15 \
-    --per_device_train_batch_size 4 \
-    --per_device_eval_batch_size 4 \
-    --dataloader_num_workers 4 \
-    --gradient_accumulation_steps 4 \
+    --per_device_train_batch_size 2 \
+    --per_device_eval_batch_size 2 \
+    --dataloader_num_workers 0 \
+    --gradient_accumulation_steps 8 \
     --learning_rate 1e-4 \
     --weight_decay 0.005 \
     --warmup_ratio 0.1 \
@@ -153,7 +153,7 @@ require_file data/manifests/dev_clean.jsonl
 require_file data/vocab/vocab.json
 
 "$PYTHON_EXE" -c \
-  "import torch; assert torch.cuda.is_available(), 'CUDA is not available'; print(torch.cuda.get_device_name(0))"
+  "import torch; assert torch.cuda.is_available(), 'CUDA is not available'; print(torch.cuda.get_device_name(0)); print('torch=', torch.__version__, 'cudnn=', torch.backends.cudnn.version()); x=torch.zeros((2, 1, 240000), device='cuda'); conv=torch.nn.Conv1d(1, 512, 10, 5, bias=False).cuda(); y=conv(x); print('cuDNN Conv1d preflight OK:', tuple(y.shape))"
 
 for experiment in "${EXPERIMENTS[@]}"; do
   echo "===== Starting ${experiment^^} ====="

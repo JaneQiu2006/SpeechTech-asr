@@ -240,8 +240,10 @@ python scripts/train_ctc.py `
 
 - 新增 `scripts/train_e2_e4_rtx3090.sh`，用于在 Linux RTX 3090 24GB
   服务器上串行执行 E2、E3、E4。
-- train/eval batch size 设为 4、gradient accumulation 设为 4，有效
-  batch size 仍为 16，不改变实验定义；data loader workers 设为 4。
+- 初始 train/eval batch size 4、gradient accumulation 4 在远程 3090 Ti
+  首个 cuDNN 卷积处触发 `CUDNN_STATUS_NOT_INITIALIZED`。保守配置修正为
+  batch size 2、gradient accumulation 8、data loader workers 0；有效
+  batch size 仍为 16，不改变实验定义。
 - 支持从 `e2`、`e3` 或 `e4` 开始，便于中断后继续后续实验。
 - 每项实验写入独立 `logs/*_rtx3090.log`，并拒绝覆盖已有 experiment
   目录或 prediction 文件。
