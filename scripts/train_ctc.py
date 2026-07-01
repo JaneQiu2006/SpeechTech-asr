@@ -35,6 +35,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--metrics_path", type=Path, default=PROJECT_ROOT / "results/metrics.csv")
     parser.add_argument("--freeze_encoder", action="store_true")
     parser.add_argument(
+        "--freeze_transformer_layers",
+        type=int,
+        default=0,
+        help="Freeze the bottom N Transformer blocks while training higher blocks.",
+    )
+    parser.add_argument(
+        "--ctc_head_type",
+        choices=("linear", "bilstm"),
+        default="linear",
+    )
+    parser.add_argument("--ctc_head_hidden_size", type=int, default=256)
+    parser.add_argument("--ctc_head_num_layers", type=int, default=2)
+    parser.add_argument("--ctc_head_dropout", type=float, default=0.1)
+    parser.add_argument(
         "--ctc_loss_reduction",
         choices=("mean", "sum"),
         default="mean",
@@ -313,6 +327,32 @@ def optimizer_parameter_groups(
     return result
 
 
+def transformer_encoder_layers(model: Any) -> list[Any]:
+    """Locate the Transformer block list across supported SSL encoders."""
+    base_model = getattr(model, getattr(model, "base_model_prefix", ""), None)
+    encoder = getattr(base_model, "encoder", None)
+    layers = getattr(encoder, "layers", None)
+    if layers is None:
+        raise RuntimeError(
+            f"{type(model).__name__} does not expose base_model.encoder.layers"
+        )
+    return list(layers)
+
+
+def freeze_bottom_transformer_layers(model: Any, count: int) -> tuple[list[int], list[int]]:
+    """Freeze the bottom ``count`` blocks and report frozen/trainable indices."""
+    layers = transformer_encoder_layers(model)
+    if count < 0 or count > len(layers):
+        raise ValueError(
+            f"--freeze_transformer_layers must be in [0, {len(layers)}], got {count}"
+        )
+    for index, layer in enumerate(layers):
+        if index < count:
+            for parameter in layer.parameters():
+                parameter.requires_grad = False
+    return list(range(count)), list(range(count, len(layers)))
+
+
 LIBRISPEECH_SPLITS = ("train-clean-100", "dev-clean", "test-clean")
 
 
@@ -381,6 +421,7 @@ def main() -> None:
         import torch
         from transformers import (
             AutoFeatureExtractor,
+            AutoConfig,
             AutoModelForCTC,
             Trainer,
             TrainerCallback,
@@ -429,14 +470,36 @@ def main() -> None:
     )
     feature_extractor = AutoFeatureExtractor.from_pretrained(args.model_name_or_path)
     processor = Wav2Vec2Processor(feature_extractor, tokenizer)
-    model = AutoModelForCTC.from_pretrained(
-        args.model_name_or_path,
-        vocab_size=model_vocab_size,
-        pad_token_id=tokenizer.pad_token_id,
-        ctc_loss_reduction=args.ctc_loss_reduction,
-        ctc_zero_infinity=args.ctc_zero_infinity,
-        ignore_mismatched_sizes=True,
-    )
+    model_kwargs = {
+        "vocab_size": model_vocab_size,
+        "pad_token_id": tokenizer.pad_token_id,
+        "ctc_loss_reduction": args.ctc_loss_reduction,
+        "ctc_zero_infinity": args.ctc_zero_infinity,
+        "ignore_mismatched_sizes": True,
+    }
+    if args.ctc_head_type == "bilstm":
+        if args.ctc_head_hidden_size <= 0 or args.ctc_head_num_layers <= 0:
+            raise ValueError("BiLSTM head size and layer count must be positive")
+        if not 0.0 <= args.ctc_head_dropout < 1.0:
+            raise ValueError("--ctc_head_dropout must be in [0, 1)")
+        config = AutoConfig.from_pretrained(args.model_name_or_path, **model_kwargs)
+        if config.model_type != "wav2vec2":
+            raise ValueError("The BiLSTM CTC head currently supports Wav2Vec2 only")
+        config.ctc_head_hidden_size = args.ctc_head_hidden_size
+        config.ctc_head_num_layers = args.ctc_head_num_layers
+        config.ctc_head_dropout = args.ctc_head_dropout
+        from ssl_asr.models import Wav2Vec2BiLSTMForCTC
+
+        model = Wav2Vec2BiLSTMForCTC.from_pretrained(
+            args.model_name_or_path,
+            config=config,
+            ignore_mismatched_sizes=True,
+        )
+    else:
+        model = AutoModelForCTC.from_pretrained(
+            args.model_name_or_path,
+            **model_kwargs,
+        )
     for option_name in ("mask_time_prob", "mask_feature_prob"):
         option_value = getattr(args, option_name)
         if option_value is not None:
@@ -453,6 +516,10 @@ def main() -> None:
         flush=True,
     )
 
+    if args.freeze_encoder and args.freeze_transformer_layers:
+        raise ValueError(
+            "--freeze_encoder and --freeze_transformer_layers are mutually exclusive"
+        )
     if args.freeze_encoder:
         for parameter in model.parameters():
             parameter.requires_grad = False
@@ -460,6 +527,19 @@ def main() -> None:
             parameter.requires_grad = True
     elif hasattr(model, "freeze_feature_encoder"):
         model.freeze_feature_encoder()
+
+    frozen_layer_indices: list[int]
+    trainable_layer_indices: list[int]
+    if args.freeze_encoder:
+        layer_count = len(transformer_encoder_layers(model))
+        frozen_layer_indices = list(range(layer_count))
+        trainable_layer_indices = []
+    else:
+        frozen_layer_indices, trainable_layer_indices = (
+            freeze_bottom_transformer_layers(
+                model, args.freeze_transformer_layers
+            )
+        )
 
     named_parameters = list(model.named_parameters())
     feature_encoder_parameters = [
@@ -518,7 +598,9 @@ def main() -> None:
         f"parameters: total={total_params:,}, trainable={trainable_params:,} "
         f"({trainable_params / total_params:.2%}); "
         f"cnn_feature_encoder_frozen=True; "
-        f"transformer_encoder_trainable={not args.freeze_encoder}",
+        f"ctc_head={args.ctc_head_type}; "
+        f"frozen_transformer_layers={frozen_layer_indices}; "
+        f"trainable_transformer_layers={trainable_layer_indices}",
         flush=True,
     )
 

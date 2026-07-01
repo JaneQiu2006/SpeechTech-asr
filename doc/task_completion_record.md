@@ -364,3 +364,25 @@ checkpoint 与训练日志尚未同步。
 - 初步结论：E2 是当前最佳系统，E4 次之；E1 frozen baseline 无有效输出；
   E3 需要检查训练曲线、checkpoint 或重跑，暂不能形成有效数据规模消融。
 - 尚缺完整远程 checkpoint/日志、test-clean 指标、训练耗时和 RTF。
+
+## 2026-07-02：剩余 GPU 新实验代码准备
+
+- 根据 `doc/ssl_asr_remaining_gpu_training_plan.md` 新增统一队列脚本
+  `scripts/train_new_experiments_rtx3090.sh`。默认顺序为
+  E5→E6a→E6b→E7→E8→E9→E3r，也可单独选择任意实验；所有实验拒绝覆盖
+  已有 output、prediction 和 log。
+- E5 使用过滤后累计到 3h 的嵌套 manifest：
+  `train_3h_effective_15s.jsonl`，共953条、3.00105h、244位说话人，全部
+  包含于既有 E2 实际训练集。
+- `train_ctc.py` 新增 `--freeze_transformer_layers`，兼容 Wav2Vec2、
+  WavLM 和 HuBERT，并打印冻结/可训练层索引。E6a 的真实 GPU 单步验证
+  得到47,667,102个可训练参数（50.50%），准确冻结第0–5层。
+- E7 `facebook/hubert-base-ls960` 已完成真实 GPU 单步训练、评估、
+  checkpoint 恢复和 prediction 保存验证。
+- E8 通过显式 `mask_time_prob=0.05`、`mask_feature_prob=0.05` 在 E2
+  默认 time masking 基础上增加 feature masking。
+- E9 新增可保存和重新加载的 `Wav2Vec2BiLSTMForCTC`，使用冻结 encoder
+  和两层双向 LSTM head。启动验证发现 FP16 LSTM loss 为 NaN，改用 FP32
+  后 loss 有限，训练、评估及 checkpoint 重载均通过。
+- 新增 E5–E9 六份 YAML 配置；单元测试增至8项并全部通过，所有 YAML、
+  Python 和 Bash 静态检查通过。

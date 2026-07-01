@@ -135,6 +135,42 @@ conda activate ssl_asr
 powershell -ExecutionPolicy Bypass -File scripts/train_wavlm_finetune_10h.ps1
 ```
 
+## 8. Remaining-GPU experiment queue (E5-E9 + E3r)
+
+Generate the effective 3h subset used by E5:
+
+```powershell
+python scripts/prepare_librispeech_subsets.py --local_only --splits train-clean-100 --target_hours 3 --max_train_duration_in_seconds 15 --subset_suffix effective_15s
+```
+
+On the RTX 3090 server, the default command puts all new experiments first,
+then runs repaired E3:
+
+```text
+E5 → E6a → E6b → E7 → E8 → E9 → E3r
+```
+
+```bash
+bash scripts/train_new_experiments_rtx3090.sh
+```
+
+Experiments can also be selected explicitly:
+
+```bash
+bash scripts/train_new_experiments_rtx3090.sh e5
+bash scripts/train_new_experiments_rtx3090.sh e6a e6b
+bash scripts/train_new_experiments_rtx3090.sh e7
+bash scripts/train_new_experiments_rtx3090.sh e8
+bash scripts/train_new_experiments_rtx3090.sh e9
+bash scripts/train_new_experiments_rtx3090.sh e3r
+```
+
+E6a/E6b freeze the bottom 6/9 Transformer blocks. E7 uses HuBERT-base,
+E8 adds feature masking to the default time masking, and E9 trains a
+two-layer BiLSTM CTC head over a frozen Wav2Vec2 encoder. E9 intentionally
+uses FP32 because the CUDA FP16 LSTM startup check produced NaN loss.
+All launchers refuse to overwrite an existing output, prediction, or log.
+
 The first run downloads `microsoft/wavlm-base`. The script refuses to
 overwrite `exp/wavlm_finetune_10h`; reproducibility settings are in
 `configs/wavlm_finetune_10h.yaml`.

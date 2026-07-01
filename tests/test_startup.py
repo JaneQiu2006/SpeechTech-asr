@@ -117,3 +117,42 @@ def test_filtered_duration_subset_reaches_effective_target_and_is_deterministic(
     assert len(first) == 4
     assert all(record["id"] != "too-long" for record in first)
     assert sum(record["duration"] for record in first) == 3600.0
+
+
+def test_freeze_bottom_transformer_layers():
+    import pytest
+
+    from scripts.train_ctc import freeze_bottom_transformer_layers
+
+    class Parameter:
+        requires_grad = True
+
+    class Layer:
+        def __init__(self):
+            self.parameter = Parameter()
+
+        def parameters(self):
+            return [self.parameter]
+
+    class Encoder:
+        layers = [Layer() for _ in range(4)]
+
+    class Base:
+        encoder = Encoder()
+
+    class Model:
+        base_model_prefix = "base"
+        base = Base()
+
+    model = Model()
+    frozen, trainable = freeze_bottom_transformer_layers(model, 2)
+    assert frozen == [0, 1]
+    assert trainable == [2, 3]
+    assert [layer.parameter.requires_grad for layer in model.base.encoder.layers] == [
+        False,
+        False,
+        True,
+        True,
+    ]
+    with pytest.raises(ValueError, match=r"must be in \[0, 4\]"):
+        freeze_bottom_transformer_layers(model, 5)
