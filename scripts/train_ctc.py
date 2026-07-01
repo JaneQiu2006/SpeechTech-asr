@@ -78,6 +78,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fp16", action="store_true")
     parser.add_argument("--gradient_checkpointing", action="store_true")
     parser.add_argument(
+        "--load_best_model_at_end",
+        action="store_true",
+        help="Reload the checkpoint with the lowest dev WER after training.",
+    )
+    parser.add_argument(
         "--disable_cudnn",
         action="store_true",
         help="Use native CUDA kernels when the host cuDNN runtime cannot initialize.",
@@ -471,6 +476,7 @@ def main() -> None:
         report_to=[],
         seed=args.seed,
         remove_unused_columns=False,
+        load_best_model_at_end=args.load_best_model_at_end,
     )
     argument_names = inspect.signature(TrainingArguments).parameters
     eval_strategy = "steps" if args.eval_steps is not None else "epoch"
@@ -479,6 +485,9 @@ def main() -> None:
     else:
         training_kwargs["evaluation_strategy"] = eval_strategy
     training_kwargs["save_strategy"] = eval_strategy
+    if args.load_best_model_at_end:
+        training_kwargs["metric_for_best_model"] = "wer"
+        training_kwargs["greater_is_better"] = False
     if args.eval_steps is not None:
         if args.eval_steps <= 0:
             raise ValueError("--eval_steps must be positive")
