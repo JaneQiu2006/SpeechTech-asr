@@ -158,3 +158,8 @@ project's `data/` directory. If audio is elsewhere on the server, set
 The server script also runs a real cuDNN Conv1d preflight. If the rented
 host's cuDNN runtime cannot initialize, it automatically passes
 `--disable_cudnn` and verifies the native CUDA Conv1d fallback before training.
+
+For a clean RTX 3090 environment, install the official PyTorch CUDA wheel
+first, then use `requirements-rtx3090.txt`. Do not install the
+`datasets[audio]` extra in this environment: current major versions can pull
+TorchCodec and replace the selected PyTorch CUDA build.
