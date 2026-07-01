@@ -85,10 +85,68 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def tokenizer_id_space_size(tokenizer: Any) -> int:
+    """Return the output size required to represent every tokenizer ID."""
+    vocabulary = tokenizer.get_vocab()
+    if not vocabulary:
+        raise ValueError("Tokenizer vocabulary is empty")
+    token_ids = list(vocabulary.values())
+    if any(not isinstance(token_id, int) or token_id < 0 for token_id in token_ids):
+        raise ValueError("Tokenizer vocabulary contains invalid token IDs")
+    return max(token_ids) + 1
+
+
+def encode_ctc_labels(
+    tokenizer: Any,
+    text: str,
+    vocab_size: int,
+    record_id: str,
+) -> list[int]:
+    """Encode one transcript and fail with context on an invalid label ID."""
+    labels = tokenizer(
+        normalize_text(text),
+        add_special_tokens=False,
+    ).input_ids
+    invalid_ids = sorted(
+        {token_id for token_id in labels if token_id < 0 or token_id >= vocab_size}
+    )
+    if invalid_ids:
+        raise ValueError(
+            f"{record_id}: label IDs {invalid_ids} are outside the model range "
+            f"[0, {vocab_size - 1}]"
+        )
+    return labels
+
+
+def validate_record_labels(
+    records: list[dict],
+    tokenizer: Any,
+    vocab_size: int,
+    split_name: str,
+) -> None:
+    """Validate every transcript before spending time on model training."""
+    highest_label_id = -1
+    for record in records:
+        labels = encode_ctc_labels(
+            tokenizer,
+            str(record["text"]),
+            vocab_size,
+            str(record["id"]),
+        )
+        if labels:
+            highest_label_id = max(highest_label_id, max(labels))
+    print(
+        f"[data] {split_name} label validation passed: "
+        f"highest_label_id={highest_label_id}, vocab_size={vocab_size}",
+        flush=True,
+    )
+
+
 class ManifestDataset:
-    def __init__(self, records: list[dict], processor: Any):
+    def __init__(self, records: list[dict], processor: Any, vocab_size: int):
         self.records = records
         self.processor = processor
+        self.vocab_size = vocab_size
 
     def __len__(self) -> int:
         return len(self.records)
@@ -107,7 +165,12 @@ class ManifestDataset:
                 f"{record['audio_path']} is {sample_rate} Hz; startup expects 16 kHz"
             )
         inputs = self.processor(waveform, sampling_rate=sample_rate)
-        labels = self.processor.tokenizer(normalize_text(record["text"])).input_ids
+        labels = encode_ctc_labels(
+            self.processor.tokenizer,
+            str(record["text"]),
+            self.vocab_size,
+            str(record["id"]),
+        )
         return {
             "input_values": inputs.input_values[0],
             "labels": labels,
@@ -252,6 +315,14 @@ def main() -> None:
         pad_token="[PAD]",
         word_delimiter_token="|",
     )
+    model_vocab_size = tokenizer_id_space_size(tokenizer)
+    print(
+        f"[startup] tokenizer: entries={len(tokenizer)}, "
+        f"max_token_id={model_vocab_size - 1}, "
+        f"model_vocab_size={model_vocab_size}, "
+        f"added_vocab={tokenizer.get_added_vocab()}",
+        flush=True,
+    )
     print(
         f"[startup] loading pretrained checkpoint {args.model_name_or_path}; "
         "the first run downloads it from Hugging Face",
@@ -261,7 +332,7 @@ def main() -> None:
     processor = Wav2Vec2Processor(feature_extractor, tokenizer)
     model = AutoModelForCTC.from_pretrained(
         args.model_name_or_path,
-        vocab_size=len(tokenizer),
+        vocab_size=model_vocab_size,
         pad_token_id=tokenizer.pad_token_id,
         ctc_loss_reduction=args.ctc_loss_reduction,
         ctc_zero_infinity=args.ctc_zero_infinity,
@@ -349,8 +420,20 @@ def main() -> None:
         args.max_duration_in_seconds,
         args.data_root,
     )
-    train_dataset = ManifestDataset(train_records, processor)
-    eval_dataset = ManifestDataset(eval_records, processor)
+    validate_record_labels(
+        train_records,
+        tokenizer,
+        model.config.vocab_size,
+        args.train_manifest.stem,
+    )
+    validate_record_labels(
+        eval_records,
+        tokenizer,
+        model.config.vocab_size,
+        args.eval_manifest.stem,
+    )
+    train_dataset = ManifestDataset(train_records, processor, model.config.vocab_size)
+    eval_dataset = ManifestDataset(eval_records, processor, model.config.vocab_size)
     print(
         f"[data] train={len(train_records)} utterances, "
         f"eval={len(eval_records)} utterances",

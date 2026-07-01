@@ -108,6 +108,24 @@ python scripts/train_ctc.py `
   - prediction：`results/predictions/wav2vec2_frozen_10h_dev.jsonl`。
   - 指标已追加到 `results/metrics.csv`。
 
+## 2026-07-01：CTC tokenizer/model vocabulary 一致性修复
+
+状态：已完成。
+
+- 修复远程 E1 训练中出现的
+  `ValueError: Label values must be <= vocab_size`。
+- 模型输出维度不再使用可能低估 ID 空间的 `len(tokenizer)`，改为
+  `max(tokenizer.get_vocab().values()) + 1`。
+- transcript 编码显式设置 `add_special_tokens=False`。
+- 增加两层标签范围检查：
+  - 训练开始前扫描 train/dev 的全部 transcript。
+  - Dataset 读取每条样本时再次检查，并在异常中报告 utterance ID。
+- 启动日志现在输出 tokenizer entries、最大 token ID、模型 vocab size 和
+  added vocabulary，便于排查跨主机词表差异。
+- 回归测试：`python -m pytest -q`，结果 `5 passed`。
+- 真实 Trainer 冒烟测试：2 条 train、2 条 dev、1 optimizer step，训练、
+  评估和 prediction 导出全部成功。
+
 ## 2026-07-01：E2 Wav2Vec2 fine-tune 10h
 
 状态：远程正式训练与 dev 指标完成；完整远程 checkpoint 尚未同步到本地。
