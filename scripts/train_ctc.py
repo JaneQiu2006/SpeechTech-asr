@@ -307,7 +307,9 @@ def main() -> None:
         raise RuntimeError("Fine-tune mode does not have a trainable Transformer encoder")
 
     if args.gradient_checkpointing:
-        model.gradient_checkpointing_enable()
+        model.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": False}
+        )
         base_model = getattr(model, getattr(model, "base_model_prefix", ""), None)
         feature_encoder = getattr(base_model, "feature_extractor", None)
         if feature_encoder is None:
@@ -317,6 +319,11 @@ def main() -> None:
         for module in feature_encoder.modules():
             if hasattr(module, "gradient_checkpointing"):
                 module.gradient_checkpointing = False
+        print(
+            "[startup] gradient checkpointing: non-reentrant Transformer only; "
+            "frozen CNN excluded",
+            flush=True,
+        )
 
     total_params = sum(parameter.numel() for parameter in model.parameters())
     trainable_params = sum(
