@@ -24,6 +24,7 @@ PYTHON_EXE="${PYTHON_EXE:-python}"
 DATA_ROOT="${DATA_ROOT:-data}"
 START_FROM="${1:-e4}"
 CUDNN_ARGS=()
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 case "$START_FROM" in
   e2) EXPERIMENTS=(e2 e3 e4) ;;
@@ -134,10 +135,10 @@ run_e4() {
     --ctc_loss_reduction mean \
     --ctc_zero_infinity \
     --max_duration_in_seconds 15 \
-    --per_device_train_batch_size 2 \
-    --per_device_eval_batch_size 2 \
+    --per_device_train_batch_size 1 \
+    --per_device_eval_batch_size 1 \
     --dataloader_num_workers 0 \
-    --gradient_accumulation_steps 8 \
+    --gradient_accumulation_steps 16 \
     --learning_rate 1e-4 \
     --weight_decay 0.005 \
     --warmup_ratio 0.1 \

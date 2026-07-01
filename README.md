@@ -145,9 +145,12 @@ bash scripts/train_e2_e4_rtx3090.sh e2
 bash scripts/train_e2_e4_rtx3090.sh e3
 ```
 
-The script uses train/eval batch size 2, gradient accumulation 8, and zero
-data-loader workers for stable CUDA initialization on rented Linux hosts. It
-writes one log per experiment below `logs/` and
+The script uses train/eval batch size 2 with gradient accumulation 8 for
+E2/E3. E4 uses batch size 1 with gradient accumulation 16 because WavLM and
+the native-CUDA convolution fallback have a higher memory peak. All three
+retain an effective batch size of 16 and use zero data-loader workers. The
+script enables expandable CUDA allocator segments, writes one log per
+experiment below `logs/`, and
 refuses to overwrite existing experiment directories or prediction files.
 Migrated Windows manifest paths are automatically relocated below the current
 project's `data/` directory. If audio is elsewhere on the server, set
