@@ -369,8 +369,8 @@ checkpoint 与训练日志尚未同步。
 
 - 根据 `doc/ssl_asr_remaining_gpu_training_plan.md` 新增统一队列脚本
   `scripts/train_new_experiments_rtx3090.sh`。默认顺序为
-  E5→E6a→E6b→E7→E8→E9→E3r，也可单独选择任意实验；所有实验拒绝覆盖
-  已有 output、prediction 和 log。
+  E1-30→E3r→E5→E6a→E6b→E7→E8→E9，也可单独选择任意实验；所有实验
+  拒绝覆盖已有 output、prediction 和 log。
 - E5 使用过滤后累计到 3h 的嵌套 manifest：
   `train_3h_effective_15s.jsonl`，共953条、3.00105h、244位说话人，全部
   包含于既有 E2 实际训练集。

@@ -2,13 +2,14 @@
 set -euo pipefail
 
 # GPU experiment queue from doc/ssl_asr_remaining_gpu_training_plan.md.
-# With no arguments, run all new experiments first, followed by repaired E3:
-# E5, E6a, E6b, E7, E8, E9, E3r.
+# With no arguments, run fair E1-30, repaired E3, then the new experiments:
+# E1-30, E3r, E5, E6a, E6b, E7, E8, E9.
 # Examples:
 #   bash scripts/train_new_experiments_rtx3090.sh
 #   bash scripts/train_new_experiments_rtx3090.sh e5
 #   bash scripts/train_new_experiments_rtx3090.sh e7 e8
 #   bash scripts/train_new_experiments_rtx3090.sh e3r
+#   bash scripts/train_new_experiments_rtx3090.sh e1-30
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
@@ -19,16 +20,16 @@ CUDNN_ARGS=()
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 if [[ "$#" -eq 0 ]]; then
-  EXPERIMENTS=(e5 e6a e6b e7 e8 e9 e3r)
+  EXPERIMENTS=(e1-30 e3r e5 e6a e6b e7 e8 e9)
 else
   EXPERIMENTS=("$@")
 fi
 
 for experiment in "${EXPERIMENTS[@]}"; do
   case "$experiment" in
-    e5|e6a|e6b|e7|e8|e9|e3r) ;;
+    e1-30|e3r|e5|e6a|e6b|e7|e8|e9) ;;
     *)
-      echo "Unknown experiment '$experiment'; use e5, e6a, e6b, e7, e8, e9, or e3r." >&2
+      echo "Unknown experiment '$experiment'; use e1-30, e3r, e5, e6a, e6b, e7, e8, or e9." >&2
       exit 2
       ;;
   esac
@@ -85,6 +86,19 @@ run_experiment() {
   local -a experiment_args
 
   case "$experiment" in
+    e1-30)
+      output_dir="exp/wav2vec2_frozen_10h_fair_30ep"
+      experiment_args=(
+        --model_name_or_path facebook/wav2vec2-base
+        --train_manifest data/manifests/train_10h.jsonl
+        --freeze_encoder
+        --num_train_epochs 30
+        --learning_rate 1e-4
+        --warmup_ratio 0.1
+        --save_total_limit 2
+        --fp16
+      )
+      ;;
     e5)
       output_dir="exp/wav2vec2_finetune_3h"
       experiment_args=(
@@ -197,7 +211,13 @@ run_experiment() {
   esac
 
   prediction_path="results/predictions/$(basename "$output_dir")_dev.jsonl"
-  log_path="logs/$(basename "$output_dir")_rtx3090.log"
+  if [[ "$experiment" == "e1-30" ]]; then
+    # Match the standalone fair-E1 launcher exactly so either entry point
+    # detects and protects the other's artifacts.
+    log_path="logs/wav2vec2_frozen_10h_fair_30ep.log"
+  else
+    log_path="logs/$(basename "$output_dir")_rtx3090.log"
+  fi
   if [[ -e "$output_dir" || -e "$prediction_path" || -e "$log_path" ]]; then
     echo "Refusing to overwrite artifacts for $experiment:" >&2
     echo "  $output_dir" >&2

@@ -135,7 +135,7 @@ conda activate ssl_asr
 powershell -ExecutionPolicy Bypass -File scripts/train_wavlm_finetune_10h.ps1
 ```
 
-## 8. Remaining-GPU experiment queue (E5-E9 + E3r)
+## 8. Remaining-GPU experiment queue (E1-30, E3r, E5-E9)
 
 Generate the effective 3h subset used by E5:
 
@@ -143,11 +143,11 @@ Generate the effective 3h subset used by E5:
 python scripts/prepare_librispeech_subsets.py --local_only --splits train-clean-100 --target_hours 3 --max_train_duration_in_seconds 15 --subset_suffix effective_15s
 ```
 
-On the RTX 3090 server, the default command puts all new experiments first,
-then runs repaired E3:
+On the RTX 3090 server, the default command first runs the fair 30-epoch
+frozen baseline, then repaired E3, followed by E5-E9:
 
 ```text
-E5 → E6a → E6b → E7 → E8 → E9 → E3r
+E1-30 → E3r → E5 → E6a → E6b → E7 → E8 → E9
 ```
 
 ```bash
@@ -158,6 +158,7 @@ Experiments can also be selected explicitly:
 
 ```bash
 bash scripts/train_new_experiments_rtx3090.sh e5
+bash scripts/train_new_experiments_rtx3090.sh e1-30
 bash scripts/train_new_experiments_rtx3090.sh e6a e6b
 bash scripts/train_new_experiments_rtx3090.sh e7
 bash scripts/train_new_experiments_rtx3090.sh e8
