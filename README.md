@@ -149,3 +149,6 @@ bash scripts/train_e2_e4_rtx3090.sh e4
 The script uses train/eval batch size 4, gradient accumulation 4, and four
 data-loader workers. It writes one log per experiment below `logs/` and
 refuses to overwrite existing experiment directories or prediction files.
+Migrated Windows manifest paths are automatically relocated below the current
+project's `data/` directory. If audio is elsewhere on the server, set
+`DATA_ROOT=/path/to/data` when launching the script.

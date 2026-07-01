@@ -13,11 +13,15 @@ set -euo pipefail
 #
 # Override Python if needed:
 #   PYTHON_EXE=/path/to/python bash scripts/train_e2_e4_rtx3090.sh
+#
+# If LibriSpeech is stored outside the project:
+#   DATA_ROOT=/path/to/data bash scripts/train_e2_e4_rtx3090.sh
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
 
 PYTHON_EXE="${PYTHON_EXE:-python}"
+DATA_ROOT="${DATA_ROOT:-data}"
 START_FROM="${1:-e2}"
 
 case "$START_FROM" in
@@ -60,6 +64,7 @@ run_e2() {
     --model_name_or_path facebook/wav2vec2-base \
     --train_manifest data/manifests/train_10h.jsonl \
     --eval_manifest data/manifests/dev_clean.jsonl \
+    --data_root "$DATA_ROOT" \
     --output_dir "$output_dir" \
     --prediction_path "$prediction_path" \
     --ctc_loss_reduction mean \
@@ -89,6 +94,7 @@ run_e3() {
     --model_name_or_path facebook/wav2vec2-base \
     --train_manifest data/manifests/train_1h.jsonl \
     --eval_manifest data/manifests/dev_clean.jsonl \
+    --data_root "$DATA_ROOT" \
     --output_dir "$output_dir" \
     --prediction_path "$prediction_path" \
     --ctc_loss_reduction mean \
@@ -119,6 +125,7 @@ run_e4() {
     --model_name_or_path microsoft/wavlm-base \
     --train_manifest data/manifests/train_10h.jsonl \
     --eval_manifest data/manifests/dev_clean.jsonl \
+    --data_root "$DATA_ROOT" \
     --output_dir "$output_dir" \
     --prediction_path "$prediction_path" \
     --ctc_loss_reduction mean \

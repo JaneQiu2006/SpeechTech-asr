@@ -23,6 +23,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model_name_or_path", default="facebook/wav2vec2-base")
     parser.add_argument("--train_manifest", type=Path, required=True)
     parser.add_argument("--eval_manifest", type=Path, required=True)
+    parser.add_argument(
+        "--data_root",
+        type=Path,
+        default=PROJECT_ROOT / "data",
+        help="Local data directory used to relocate manifest paths after migration.",
+    )
     parser.add_argument("--vocab_path", type=Path, default=PROJECT_ROOT / "data/vocab/vocab.json")
     parser.add_argument("--output_dir", type=Path, required=True)
     parser.add_argument("--prediction_path", type=Path)
@@ -134,7 +140,43 @@ class CTCDataCollator:
         return batch
 
 
-def load_records(path: Path, limit: int | None, max_duration: float) -> list[dict]:
+LIBRISPEECH_SPLITS = ("train-clean-100", "dev-clean", "test-clean")
+
+
+def resolve_audio_path(audio_path: str, data_root: Path) -> Path:
+    """Resolve local, relative, or migrated Windows manifest audio paths."""
+    raw_path = Path(audio_path).expanduser()
+    candidates = [raw_path]
+    if not raw_path.is_absolute():
+        candidates.append(PROJECT_ROOT / raw_path)
+
+    # Manifests are reproducibility artifacts and may be copied between hosts.
+    # Preserve the split-relative suffix while replacing the old project root.
+    normalized_parts = audio_path.replace("\\", "/").split("/")
+    for split in LIBRISPEECH_SPLITS:
+        if split in normalized_parts:
+            split_index = len(normalized_parts) - 1 - normalized_parts[::-1].index(split)
+            candidates.append(data_root / Path(*normalized_parts[split_index:]))
+            break
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+
+    expected = candidates[-1]
+    raise FileNotFoundError(
+        f"Audio file not found. Manifest path={audio_path!r}; "
+        f"expected local path={str(expected)!r}. "
+        "Copy LibriSpeech below --data_root or pass the correct --data_root."
+    )
+
+
+def load_records(
+    path: Path,
+    limit: int | None,
+    max_duration: float,
+    data_root: Path,
+) -> list[dict]:
     records = [
         record
         for record in read_jsonl(path)
@@ -144,7 +186,14 @@ def load_records(path: Path, limit: int | None, max_duration: float) -> list[dic
         records = records[:limit]
     if not records:
         raise RuntimeError(f"No usable records in {path}")
-    return records
+    resolved_records = []
+    for record in records:
+        resolved_record = dict(record)
+        resolved_record["audio_path"] = str(
+            resolve_audio_path(str(record["audio_path"]), data_root)
+        )
+        resolved_records.append(resolved_record)
+    return resolved_records
 
 
 def main() -> None:
@@ -251,10 +300,16 @@ def main() -> None:
     )
 
     train_records = load_records(
-        args.train_manifest, args.max_train_samples, args.max_duration_in_seconds
+        args.train_manifest,
+        args.max_train_samples,
+        args.max_duration_in_seconds,
+        args.data_root,
     )
     eval_records = load_records(
-        args.eval_manifest, args.max_eval_samples, args.max_duration_in_seconds
+        args.eval_manifest,
+        args.max_eval_samples,
+        args.max_duration_in_seconds,
+        args.data_root,
     )
     train_dataset = ManifestDataset(train_records, processor)
     eval_dataset = ManifestDataset(eval_records, processor)
