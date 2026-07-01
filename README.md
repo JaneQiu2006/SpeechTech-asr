@@ -153,3 +153,6 @@ refuses to overwrite existing experiment directories or prediction files.
 Migrated Windows manifest paths are automatically relocated below the current
 project's `data/` directory. If audio is elsewhere on the server, set
 `DATA_ROOT=/path/to/data` when launching the script.
+The server script also runs a real cuDNN Conv1d preflight. If the rented
+host's cuDNN runtime cannot initialize, it automatically passes
+`--disable_cudnn` and verifies the native CUDA Conv1d fallback before training.

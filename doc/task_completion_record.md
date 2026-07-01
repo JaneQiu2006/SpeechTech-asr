@@ -244,6 +244,10 @@ python scripts/train_ctc.py `
   首个 cuDNN 卷积处触发 `CUDNN_STATUS_NOT_INITIALIZED`。保守配置修正为
   batch size 2、gradient accumulation 8、data loader workers 0；有效
   batch size 仍为 16，不改变实验定义。
+- 远程服务器的独立最小 Conv1d cuDNN 预检同样触发
+  `CUDNN_STATUS_NOT_INITIALIZED`，确认问题属于服务器 cuDNN runtime，
+  与数据和模型无关。训练入口新增 `--disable_cudnn`；3090 脚本在 cuDNN
+  预检失败时自动验证并切换到原生 CUDA FP16 Conv1d。
 - 支持从 `e2`、`e3` 或 `e4` 开始，便于中断后继续后续实验。
 - 每项实验写入独立 `logs/*_rtx3090.log`，并拒绝覆盖已有 experiment
   目录或 prediction 文件。

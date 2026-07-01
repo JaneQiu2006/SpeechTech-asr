@@ -77,6 +77,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--fp16", action="store_true")
     parser.add_argument("--gradient_checkpointing", action="store_true")
+    parser.add_argument(
+        "--disable_cudnn",
+        action="store_true",
+        help="Use native CUDA kernels when the host cuDNN runtime cannot initialize.",
+    )
     return parser.parse_args()
 
 
@@ -214,6 +219,13 @@ def main() -> None:
         )
     except ImportError as error:
         raise RuntimeError("Install the packages in requirements.txt first") from error
+
+    if args.disable_cudnn:
+        torch.backends.cudnn.enabled = False
+        print(
+            "[startup] cuDNN disabled by request; using native CUDA kernels",
+            flush=True,
+        )
 
     print(
         f"[startup] dependencies ready: torch={torch.__version__}, "

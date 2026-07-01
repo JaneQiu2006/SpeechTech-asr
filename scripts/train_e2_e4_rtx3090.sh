@@ -23,6 +23,7 @@ cd "$PROJECT_ROOT"
 PYTHON_EXE="${PYTHON_EXE:-python}"
 DATA_ROOT="${DATA_ROOT:-data}"
 START_FROM="${1:-e2}"
+CUDNN_ARGS=()
 
 case "$START_FROM" in
   e2) EXPERIMENTS=(e2 e3 e4) ;;
@@ -82,6 +83,7 @@ run_e2() {
     --eval_accumulation_steps 10 \
     --fp16 \
     --gradient_checkpointing \
+    "${CUDNN_ARGS[@]}" \
     2>&1 | tee logs/wav2vec2_finetune_10h_rtx3090.log
 }
 
@@ -113,6 +115,7 @@ run_e3() {
     --eval_accumulation_steps 10 \
     --fp16 \
     --gradient_checkpointing \
+    "${CUDNN_ARGS[@]}" \
     2>&1 | tee logs/wav2vec2_finetune_1h_rtx3090.log
 }
 
@@ -143,6 +146,7 @@ run_e4() {
     --eval_accumulation_steps 10 \
     --fp16 \
     --gradient_checkpointing \
+    "${CUDNN_ARGS[@]}" \
     2>&1 | tee logs/wavlm_finetune_10h_rtx3090.log
 }
 
@@ -153,7 +157,19 @@ require_file data/manifests/dev_clean.jsonl
 require_file data/vocab/vocab.json
 
 "$PYTHON_EXE" -c \
-  "import torch; assert torch.cuda.is_available(), 'CUDA is not available'; print(torch.cuda.get_device_name(0)); print('torch=', torch.__version__, 'cudnn=', torch.backends.cudnn.version()); x=torch.zeros((2, 1, 240000), device='cuda'); conv=torch.nn.Conv1d(1, 512, 10, 5, bias=False).cuda(); y=conv(x); print('cuDNN Conv1d preflight OK:', tuple(y.shape))"
+  "import torch; assert torch.cuda.is_available(), 'CUDA is not available'; print(torch.cuda.get_device_name(0)); print('torch=', torch.__version__, 'cudnn=', torch.backends.cudnn.version())"
+
+if "$PYTHON_EXE" -c \
+  "import torch; x=torch.zeros((2, 1, 240000), device='cuda', dtype=torch.float16); conv=torch.nn.Conv1d(1, 512, 10, 5, bias=False).cuda().half(); y=conv(x); print('cuDNN FP16 Conv1d preflight OK:', tuple(y.shape))" \
+  2>logs/cudnn_preflight_error.log; then
+  :
+else
+  echo "cuDNN Conv1d initialization failed; details: logs/cudnn_preflight_error.log" >&2
+  echo "Retrying with native CUDA kernels." >&2
+  CUDNN_ARGS=(--disable_cudnn)
+  "$PYTHON_EXE" -c \
+    "import torch; torch.backends.cudnn.enabled=False; x=torch.zeros((2, 1, 240000), device='cuda', dtype=torch.float16); conv=torch.nn.Conv1d(1, 512, 10, 5, bias=False).cuda().half(); y=conv(x); print('Native CUDA FP16 Conv1d fallback OK:', tuple(y.shape))"
+fi
 
 for experiment in "${EXPERIMENTS[@]}"; do
   echo "===== Starting ${experiment^^} ====="
