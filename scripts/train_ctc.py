@@ -101,13 +101,10 @@ class ManifestDataset:
             raise ValueError(
                 f"{record['audio_path']} is {sample_rate} Hz; startup expects 16 kHz"
             )
-        inputs = self.processor(
-            waveform, sampling_rate=sample_rate, return_attention_mask=True
-        )
+        inputs = self.processor(waveform, sampling_rate=sample_rate)
         labels = self.processor.tokenizer(normalize_text(record["text"])).input_ids
         return {
             "input_values": inputs.input_values[0],
-            "attention_mask": inputs.attention_mask[0],
             "labels": labels,
             "record_index": index,
         }
@@ -121,15 +118,15 @@ class CTCDataCollator:
         import torch
 
         input_features = [
-            {
-                "input_values": feature["input_values"],
-                "attention_mask": feature["attention_mask"],
-            }
+            {"input_values": feature["input_values"]}
             for feature in features
         ]
         label_features = [{"input_ids": feature["labels"]} for feature in features]
         batch = self.processor.pad(
-            input_features, padding=True, return_tensors="pt"
+            input_features,
+            padding=True,
+            return_attention_mask=True,
+            return_tensors="pt",
         )
         labels = self.processor.tokenizer.pad(
             label_features, padding=True, return_tensors="pt"
