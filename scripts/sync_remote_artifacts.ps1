@@ -57,7 +57,7 @@ $temporaryKeyInstalled = $false
 # Enumerate all regular files once. Missing optional directories are ignored.
 $remoteListCommand = @'
 cd '__REMOTE_ROOT__' || exit 1
-for directory in exp results logs; do
+for directory in exp results logs artifacts/kmeans; do
     if [ -d "$directory" ]; then
         find "$directory" -type f -print
     fi
@@ -150,6 +150,7 @@ fi
     )
     @(
         "model.safetensors",
+        "model.pt",
         "config.json",
         "generation_config.json",
         "preprocessor_config.json",
@@ -158,7 +159,9 @@ fi
         "added_tokens.json",
         "vocab.json",
         "trainer_state.json",
-        "training_args.bin"
+        "training_args.bin",
+        "completion.json",
+        "summary.json"
     ) | ForEach-Object {
         [void]$requiredExpNames.Add($_)
     }
@@ -180,6 +183,21 @@ fi
 
         if ($relativePath.StartsWith("results/") -or $relativePath.StartsWith("logs/")) {
             $relativePath
+            continue
+        }
+
+        if ($relativePath.StartsWith("artifacts/kmeans/")) {
+            $artifactName = [System.IO.Path]::GetFileName($relativePath)
+            if (
+                $artifactName -in @(
+                    "best_layer.txt",
+                    "centers.npy",
+                    "kmeans.joblib",
+                    "summary.json"
+                )
+            ) {
+                $relativePath
+            }
             continue
         }
 

@@ -386,3 +386,26 @@ checkpoint 与训练日志尚未同步。
   后 loss 有限，训练、评估及 checkpoint 重载均通过。
 - 新增 E5–E9 六份 YAML 配置；单元测试增至8项并全部通过，所有 YAML、
   Python 和 Bash 静态检查通过。
+
+## 2026-07-02：E10–E12 表征层与离散单元扩展代码
+
+- 新增扩展实验规划
+  `doc/ssl_representation_discrete_units_extension_plan.md`。
+- 新增冻结 Wav2Vec2 layer 6/9/12 的一次性 FP16 特征缓存入口；encoder
+  固定为 eval 模式，真实输出长度之外的 padding 帧不会进入缓存。
+- 新增训练集专用 MiniBatch K-means，支持 K=50/100/200；dev/test 不参与
+  codebook 拟合。离散 downstream 输入使用聚类中心向量，与连续系统共用
+  相同的两层 BiLSTM-CTC head。
+- 新增 raw/deduplicated unit token rate、entropy、perplexity、codebook
+  utilization、empirical/fixed-width bitrate 统计。
+- 新增 E10 dev 层选择、E10/E11 端到端 test-clean 评估，以及 E12a
+  1h time-masking 配置。
+- 新增服务器队列 `scripts/train_representation_extension_rtx3090.sh` 和
+  本地测试入口 `scripts/test_representation_extension.ps1`。
+- 远程同步脚本已支持 E10/E11 的 PyTorch head 与 K-means codebook，
+  默认不传输可重建的大体积 feature/unit cache。
+- 连续和离散路径均通过合成缓存的一步 CPU forward/backward、保存、重载
+  smoke test；所有 smoke/debug 产物已在验证后删除。
+- 真实 LibriSpeech 单样本的 layer 6/9/12 提取与连续端到端评估通过；
+  基础回归测试为 11 passed、1 skipped（基础 Python 环境未安装 torch），
+  torch 相关路径已在 `ssl_asr` 环境中单独验证。

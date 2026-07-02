@@ -20,7 +20,7 @@ CUDNN_ARGS=()
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 if [[ "$#" -eq 0 ]]; then
-  EXPERIMENTS=(e1-30 e3r e5 e6a e6b e7 e8 e9)
+  EXPERIMENTS=(e8 e9)
 else
   EXPERIMENTS=("$@")
 fi

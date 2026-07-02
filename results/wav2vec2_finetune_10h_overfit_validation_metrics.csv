@@ -1,2 +1,0 @@
-experiment,split,model,freeze_encoder,num_samples,wer,cer,total_params,trainable_params
-wav2vec2_finetune_10h_overfit_validation,train_10h,facebook/wav2vec2-base,False,100,1.0,0.998556165174704,94394782,90194334

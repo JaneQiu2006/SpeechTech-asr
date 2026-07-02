@@ -7,3 +7,4 @@ jiwer>=3.0
 soundfile>=0.12
 PyYAML>=6.0
 numpy>=1.24
+scikit-learn>=1.3

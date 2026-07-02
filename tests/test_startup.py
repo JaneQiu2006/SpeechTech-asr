@@ -156,3 +156,69 @@ def test_freeze_bottom_transformer_layers():
     ]
     with pytest.raises(ValueError, match=r"must be in \[0, 4\]"):
         freeze_bottom_transformer_layers(model, 5)
+
+
+def test_evaluation_resolves_latest_complete_checkpoint(tmp_path: Path):
+    from scripts.evaluate_e1_e5 import resolve_model_dir
+
+    for step in (100, 300):
+        checkpoint = tmp_path / f"checkpoint-{step}"
+        checkpoint.mkdir()
+        (checkpoint / "config.json").write_text("{}", encoding="utf-8")
+        (checkpoint / "model.safetensors").write_bytes(b"weights")
+    incomplete = tmp_path / "checkpoint-500"
+    incomplete.mkdir()
+    (incomplete / "config.json").write_text("{}", encoding="utf-8")
+
+    assert resolve_model_dir(tmp_path) == tmp_path / "checkpoint-300"
+
+
+def test_evaluation_metric_skip_is_test_split_specific():
+    from scripts.evaluate_e1_e5 import has_complete_metric
+
+    rows = [
+        {
+            "experiment_id": "E2",
+            "split": "dev_clean",
+            "wer": "0.1",
+            "cer": "0.03",
+        },
+        {
+            "experiment_id": "E3",
+            "split": "test_clean",
+            "wer": "0.2",
+            "cer": "0.05",
+            "ctc_token_rate": "12.0",
+            "ctc_label_bitrate_bps": "50.0",
+        },
+    ]
+    assert not has_complete_metric(rows, "E2")
+    assert has_complete_metric(rows, "E3")
+
+
+def test_ctc_label_statistics():
+    from scripts.evaluate_e1_e5 import compute_ctc_label_statistics
+
+    class Encoding:
+        def __init__(self, input_ids):
+            self.input_ids = input_ids
+
+    class Tokenizer:
+        ids = {"a b": [1, 27, 2], "a": [1]}
+
+        def __call__(self, text, add_special_tokens):
+            assert not add_special_tokens
+            return Encoding(self.ids[text])
+
+    rows = [
+        {"prediction": "a b", "duration": 1.0},
+        {"prediction": "a", "duration": 1.0},
+    ]
+    statistics = compute_ctc_label_statistics(rows, Tokenizer(), 30, 1.0)
+    assert statistics["ctc_output_tokens"] == 4
+    assert statistics["ctc_used_token_types"] == 3
+    assert statistics["ctc_vocab_utilization"] == 0.1
+    assert statistics["ctc_token_rate"] == 2.0
+    assert statistics["ctc_token_throughput"] == 4.0
+    assert statistics["ctc_token_entropy_bits"] == 1.5
+    assert statistics["ctc_label_bitrate_bps"] == 3.0

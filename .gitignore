@@ -11,6 +11,8 @@ data/**/*.crdownload
 data/manifests/*.jsonl
 data/vocab/*.json
 exp/
+features/
+artifacts/kmeans/
 results/predictions/
 results/metrics.csv
 
