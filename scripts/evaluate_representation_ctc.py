@@ -19,7 +19,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from ssl_asr.manifest import read_jsonl
-from ssl_asr.metrics import compute_error_rates, save_predictions
+from ssl_asr.metrics import append_metrics, compute_error_rates, save_predictions
 from ssl_asr.representations import (
     CachedBiLSTMCTC,
     resolve_audio_path,
@@ -113,22 +113,7 @@ def read_metric_rows(path: Path) -> list[dict[str, str]]:
 
 
 def upsert_metric(path: Path, row: dict) -> None:
-    rows = [
-        old
-        for old in read_metric_rows(path)
-        if not (
-            old.get("experiment") == str(row["experiment"])
-            and old.get("split") == str(row["split"])
-        )
-    ]
-    rows.append({field: str(row.get(field, "")) for field in FIELDS})
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = path.with_suffix(path.suffix + ".tmp")
-    with temporary_path.open("w", encoding="utf-8", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=FIELDS)
-        writer.writeheader()
-        writer.writerows(rows)
-    temporary_path.replace(path)
+    append_metrics(path, row)
 
 
 def batches(rows: list[dict], size: int):
@@ -211,11 +196,11 @@ def main() -> None:
         centers = torch.from_numpy(
             np.load(args.centers, allow_pickle=False).astype(np.float32)
         ).to(args.device)
-        if head.config.representation != "discrete":
+        if not head.config.representation.startswith("discrete"):
             raise ValueError("Centers were supplied for a continuous head")
         if head.config.codebook_size != len(centers):
             raise ValueError("Head and centers use different codebook sizes")
-    elif head.config.representation != "continuous":
+    elif head.config.representation.startswith("discrete"):
         raise ValueError("A discrete head requires --centers")
 
     use_fp16 = args.device.startswith("cuda") and not args.no_fp16
@@ -260,15 +245,28 @@ def main() -> None:
         ).cpu()
         feature_sequences = []
         for item_index, length in enumerate(lengths):
-            features = outputs.hidden_states[head.config.source_layer][
-                item_index, : int(length)
-            ].float()
+            if head.config.layer_indices is not None:
+                features = torch.stack(
+                    [
+                        outputs.hidden_states[layer][item_index, : int(length)].float()
+                        for layer in head.config.layer_indices
+                    ],
+                    dim=1,
+                )
+            else:
+                features = outputs.hidden_states[head.config.source_layer][
+                    item_index, : int(length)
+                ].float()
             total_frames += int(length)
             if centers is not None:
                 distances = torch.cdist(features, centers)
                 unit_ids = torch.argmin(distances, dim=-1)
                 unit_sequences.append(unit_ids.detach().cpu().numpy())
-                features = centers[unit_ids]
+                features = (
+                    unit_ids
+                    if head.config.unit_embedding_dim is not None
+                    else centers[unit_ids]
+                )
             feature_sequences.append(features)
         padded_features = torch.nn.utils.rnn.pad_sequence(
             feature_sequences, batch_first=True
@@ -312,6 +310,7 @@ def main() -> None:
     encoder_params = sum(parameter.numel() for parameter in encoder.parameters())
     head_params = sum(parameter.numel() for parameter in head.parameters())
     metric = {
+        "experiment_id": args.experiment.split("_", 1)[0].upper(),
         "experiment": args.experiment,
         "split": "test_clean",
         "representation": head.config.representation,
@@ -323,7 +322,9 @@ def main() -> None:
         **rates,
         "encoder_params": encoder_params,
         "head_params": head_params,
+        "total_params": encoder_params + head_params,
         "trainable_params": head_params,
+        "trainable_ratio": head_params / (encoder_params + head_params),
         "inference_seconds": inference_seconds,
         "rtf": inference_seconds / audio_seconds,
         "feature_rate": feature_rate,

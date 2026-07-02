@@ -1,0 +1,5 @@
+experiment: E17
+codebook_sizes: [500, 1000]
+max_fit_frames: 500000
+discrete_input_type: centroid
+seed: 42

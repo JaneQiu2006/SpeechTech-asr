@@ -18,7 +18,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from ssl_asr.manifest import read_jsonl
-from ssl_asr.metrics import compute_error_rates
+from ssl_asr.metrics import append_metrics, compute_error_rates
 from ssl_asr.text import normalize_text
 
 
@@ -176,6 +176,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable CUDA FP16 inference.",
     )
+    parser.add_argument("--custom_experiment_id")
+    parser.add_argument("--custom_experiment_name")
+    parser.add_argument("--custom_model_dir", type=Path)
+    parser.add_argument("--custom_processor_dir", type=Path)
+    parser.add_argument("--custom_freeze_transformer_layers", type=int, default=0)
     return parser.parse_args()
 
 
@@ -237,24 +242,7 @@ def has_complete_metric(rows: Iterable[dict[str, str]], experiment_id: str) -> b
 
 
 def upsert_metric(path: Path, row: dict[str, object]) -> None:
-    rows = read_metrics(path)
-    normalized = {field: str(row.get(field, "")) for field in METRIC_FIELDS}
-    rows = [
-        old
-        for old in rows
-        if not (
-            old.get("experiment_id") == normalized["experiment_id"]
-            and old.get("split") == normalized["split"]
-        )
-    ]
-    rows.append(normalized)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = path.with_suffix(path.suffix + ".tmp")
-    with temporary_path.open("w", encoding="utf-8", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=METRIC_FIELDS)
-        writer.writeheader()
-        writer.writerows(rows)
-    temporary_path.replace(path)
+    append_metrics(path, row)
 
 
 def load_complete_predictions(path: Path, expected: int) -> list[dict] | None:
@@ -578,8 +566,36 @@ def main() -> None:
     args = parse_args()
     if args.batch_size <= 0:
         raise ValueError("--batch_size must be positive")
-    requested = {item.upper() for item in args.experiments}
-    known = {experiment.id for experiment in EXPERIMENTS}
+    custom_values = (
+        args.custom_experiment_id,
+        args.custom_experiment_name,
+        args.custom_model_dir,
+        args.custom_processor_dir,
+    )
+    if any(value is not None for value in custom_values):
+        if not all(value is not None for value in custom_values):
+            raise ValueError("All --custom_experiment_* arguments are required together")
+        custom_model_dir = args.custom_model_dir
+        custom_processor_dir = args.custom_processor_dir
+        if not custom_model_dir.is_absolute():
+            custom_model_dir = (PROJECT_ROOT / custom_model_dir).resolve()
+        if not custom_processor_dir.is_absolute():
+            custom_processor_dir = (PROJECT_ROOT / custom_processor_dir).resolve()
+        experiments = (
+            Experiment(
+                str(args.custom_experiment_id).upper(),
+                str(args.custom_experiment_name),
+                custom_model_dir,
+                custom_processor_dir,
+                False,
+                freeze_transformer_layers=args.custom_freeze_transformer_layers,
+            ),
+        )
+        requested = {experiments[0].id}
+    else:
+        experiments = EXPERIMENTS
+        requested = {item.upper() for item in args.experiments}
+    known = {experiment.id for experiment in experiments}
     unknown = requested - known
     if unknown:
         raise ValueError(f"Unknown experiment IDs: {sorted(unknown)}")
@@ -594,7 +610,7 @@ def main() -> None:
         flush=True,
     )
 
-    for experiment in EXPERIMENTS:
+    for experiment in experiments:
         if experiment.id not in requested:
             continue
         metric_rows = read_metrics(args.metrics_path)

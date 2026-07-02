@@ -1,0 +1,3 @@
+experiment: E21
+prediction_glob: results/predictions/**/*.jsonl
+top_n: 30

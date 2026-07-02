@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import inspect
+import json
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,8 +16,23 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from ssl_asr.manifest import read_jsonl
-from ssl_asr.metrics import append_metrics, compute_error_rates, save_predictions
+from ssl_asr.metrics import (
+    append_metrics,
+    atomic_write_json,
+    compute_error_rates,
+    save_predictions,
+)
 from ssl_asr.text import normalize_text
+
+
+def git_revision() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=PROJECT_ROOT, text=True, stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
 
 
 def parse_args() -> argparse.Namespace:
@@ -31,6 +48,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--vocab_path", type=Path, default=PROJECT_ROOT / "data/vocab/vocab.json")
     parser.add_argument("--output_dir", type=Path, required=True)
+    parser.add_argument("--experiment_id")
     parser.add_argument("--prediction_path", type=Path)
     parser.add_argument("--metrics_path", type=Path, default=PROJECT_ROOT / "results/metrics.csv")
     parser.add_argument("--freeze_encoder", action="store_true")
@@ -131,6 +149,8 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Use native CUDA kernels when the host cuDNN runtime cannot initialize.",
     )
+    parser.add_argument("--skip_existing", action="store_true")
+    parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
 
 
@@ -411,6 +431,13 @@ def load_records(
 
 def main() -> None:
     args = parse_args()
+    print(f"[startup] git_revision={git_revision()}", flush=True)
+    completion_path = args.output_dir / "completion.json"
+    if completion_path.is_file() and args.skip_existing and not args.overwrite:
+        print(f"[skip] completed experiment: {args.output_dir}", flush=True)
+        return
+    if completion_path.is_file() and not args.overwrite:
+        raise FileExistsError(f"Completed output exists: {args.output_dir}")
     print("[startup] importing PyTorch and Transformers training dependencies...", flush=True)
     try:
         # On Windows, importing torch before the pyarrow dataset DLLs can make
@@ -825,6 +852,7 @@ def main() -> None:
     append_metrics(
         args.metrics_path,
         {
+            "experiment_id": args.experiment_id or "",
             "experiment": args.output_dir.name,
             "split": args.eval_manifest.stem,
             "model": args.model_name_or_path,
@@ -833,7 +861,32 @@ def main() -> None:
             **rates,
             "total_params": total_params,
             "trainable_params": trainable_params,
+            "trainable_ratio": trainable_params / total_params,
+            "frozen_layer_indices": json.dumps(frozen_layer_indices),
+            "trainable_layer_indices": json.dumps(trainable_layer_indices),
+            "seed": args.seed,
+            "rtf": float(output.metrics.get("test_runtime", 0.0))
+            / sum(float(record["duration"]) for record in eval_records),
         },
+    )
+    atomic_write_json(
+        args.output_dir / "summary.json",
+        {
+            "experiment_id": args.experiment_id,
+            "dev_wer": rates["wer"],
+            "dev_cer": rates["cer"],
+            "total_params": total_params,
+            "trainable_params": trainable_params,
+            "trainable_ratio": trainable_params / total_params,
+            "frozen_layer_indices": frozen_layer_indices,
+            "trainable_layer_indices": trainable_layer_indices,
+            "seed": args.seed,
+            "git_revision": git_revision(),
+        },
+    )
+    atomic_write_json(
+        completion_path,
+        {"completed": True, "experiment_id": args.experiment_id},
     )
     print(f"evaluation: WER={rates['wer']:.4f}, CER={rates['cer']:.4f}")
     print(f"predictions: {prediction_path}")

@@ -411,3 +411,31 @@ checkpoint 与训练日志尚未同步。
   torch 相关路径已在 `ssl_asr` 环境中单独验证。
 - 新增 Linux 统一测试入口 `scripts/test_e5_e12_linux.sh`，依次评估
   E5、E6a/E6b、E8、E9、E12a、E10a–c 和 E11a–c；E7 明确跳过。
+
+## 2026-07-02：远程结果完整性审计与本地瘦身
+
+- 已确认 E5、E6a/E6b、E8、E9、E10a–c、E11a–c、E12a 共12组实验均有
+  完整 dev（2513条）和 test-clean（2620条）prediction。
+- `results/test_metrics.csv`、`results/representation_test_metrics.csv`、
+  E10/E11 summary/completion、K-means summary 和正式训练日志均通过解析与
+  非空检查。
+- 在明确不再本地执行模型推理后，删除所有模型权重、checkpoint 训练状态、
+  optimizer/scheduler/scaler/rng、缓存 head、K-means centers/joblib 和可重建
+  feature cache，共释放 17,446,373,403 bytes。
+- 保留 predictions、metrics、trainer_state JSON、模型配置、正式日志、
+  codebook summary 和 best-layer 选择，满足后续统计、错误分析和论文撰写。
+- 再次修复远程同步覆盖的 E2 dev padding 伪字符，正式 dev WER/CER 恢复为
+  0.110916/0.033013；旧 E3 collapse、旧 E1-v2 prediction 和 debug 日志已移除。
+
+## 2026-07-02：E1–E12 最终 test-clean 结果分析
+
+- 新增 `doc/e1_e12_final_test_results_analysis.md`，整合 E1–E12（E7跳过）
+  的主结果、数据规模、参数更新范围、隐藏层、连续/离散表示、bitrate、RTF
+  和错误类型分析。
+- 16份完整 test prediction 的 ID、reference、duration 和顺序完全一致。
+- 对 E8 vs E2、E12a vs E3、E6a vs E2、E10-layer9 vs E6b 执行10,000次
+  utterance-level paired bootstrap。
+- E8 相对 E2 的 −0.086 pp 和 E12a 相对 E3 的 +0.226 pp 均未达到稳定差异；
+  E6a 与 E2 的小幅差距、E10-layer9 相对 E6b 的优势具有明确配对证据。
+- 文档明确记录 E9 collapse、E10/E11 32标签 tokenizer、单seed、RTF硬件差异
+  和“表示 bitrate 不等于端到端压缩”等使用边界。

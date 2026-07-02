@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -21,9 +22,12 @@ from ssl_asr.text import normalize_text
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model_name_or_path", default="facebook/wav2vec2-base")
-    parser.add_argument("--manifest", type=Path, required=True)
-    parser.add_argument("--split", required=True)
-    parser.add_argument("--output_root", type=Path, required=True)
+    parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--split")
+    parser.add_argument("--train_manifest", type=Path)
+    parser.add_argument("--dev_manifest", type=Path)
+    parser.add_argument("--test_manifest", type=Path)
+    parser.add_argument("--output_root", "--output_dir", type=Path, required=True)
     parser.add_argument("--layers", type=int, nargs="+", default=[6, 9, 12])
     parser.add_argument("--data_root", type=Path, default=PROJECT_ROOT / "data")
     parser.add_argument("--max_duration_in_seconds", type=float, default=15.0)
@@ -31,8 +35,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch_size", type=int, default=2)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--no_fp16", action="store_true")
+    parser.add_argument("--dtype", choices=["fp16", "fp32"], default="fp16")
     parser.add_argument("--disable_cudnn", action="store_true")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--skip_existing", action="store_true")
+    parser.add_argument("--experiment_prefix")
     return parser.parse_args()
 
 
@@ -51,6 +58,38 @@ def batches(rows: list[dict], size: int):
 
 def main() -> None:
     args = parse_args()
+    manifests = [
+        (name, path) for name, path in (
+            ("train", args.train_manifest), ("dev", args.dev_manifest),
+            ("test", args.test_manifest),
+        ) if path is not None
+    ]
+    if manifests:
+        if args.manifest or args.split:
+            raise ValueError("Use either --manifest/--split or split-specific manifests")
+        for split, manifest in manifests:
+            command = [
+                sys.executable, str(Path(__file__).resolve()),
+                "--manifest", str(manifest), "--split", split,
+                "--output_root", str(args.output_root), "--layers",
+                *(str(layer) for layer in args.layers),
+                "--data_root", str(args.data_root),
+                "--max_duration_in_seconds", str(args.max_duration_in_seconds),
+                "--batch_size", str(args.batch_size), "--device", args.device,
+                "--dtype", args.dtype, "--resume",
+            ]
+            if args.max_samples is not None:
+                command.extend(["--max_samples", str(args.max_samples)])
+            if args.disable_cudnn:
+                command.append("--disable_cudnn")
+            subprocess.run(command, check=True)
+        return
+    if args.manifest is None or args.split is None:
+        raise ValueError("--manifest and --split are required in single-split mode")
+    if args.skip_existing:
+        args.resume = True
+    if args.dtype == "fp32":
+        args.no_fp16 = True
     if args.batch_size <= 0:
         raise ValueError("--batch_size must be positive")
     if not args.layers or min(args.layers) < 0:
@@ -82,12 +121,14 @@ def main() -> None:
     config_path = args.output_root / "cache_config.json"
     cache_config = {
         "model_name_or_path": args.model_name_or_path,
-        "layers": sorted(args.layers),
         "max_duration_in_seconds": args.max_duration_in_seconds,
-        "dtype": "float16",
+        "dtype": "float32" if args.no_fp16 else "float16",
     }
     if config_path.exists():
         existing = json.loads(config_path.read_text(encoding="utf-8"))
+        # Older caches recorded the requested layer subset globally, which made
+        # safe incremental extraction of additional layers impossible.
+        existing.pop("layers", None)
         if existing != cache_config:
             raise RuntimeError(
                 f"Cache configuration mismatch at {config_path}: "
@@ -170,7 +211,7 @@ def main() -> None:
                         .detach()
                         .cpu()
                         .numpy()
-                        .astype(np.float16, copy=False)
+                        .astype(np.float32 if args.no_fp16 else np.float16, copy=False)
                     )
                     atomic_save_numpy(array_path, features)
                 cached = np.load(array_path, mmap_mode="r", allow_pickle=False)

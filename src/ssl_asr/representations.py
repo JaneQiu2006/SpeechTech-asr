@@ -28,44 +28,116 @@ class CachedCTCConfig:
     source_layer: int
     representation: str
     codebook_size: int | None = None
+    head_type: str = "bilstm"
+    mlp_hidden_size: int = 512
+    num_attention_heads: int = 4
+    transformer_dim: int = 256
+    unit_embedding_dim: int | None = None
+    layer_indices: list[int] | None = None
+
+
+class LayerScalarMixture(torch.nn.Module):
+    """ELMo-style trainable scalar mixture over cached SSL layers."""
+
+    def __init__(self, num_layers: int = 13) -> None:
+        super().__init__()
+        if num_layers <= 0:
+            raise ValueError("num_layers must be positive")
+        self.scalar_parameters = torch.nn.Parameter(torch.zeros(num_layers))
+
+    @property
+    def weights(self) -> torch.Tensor:
+        return torch.softmax(self.scalar_parameters, dim=0)
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        if features.ndim != 4 or features.shape[2] != len(self.scalar_parameters):
+            raise ValueError("Mixture input must have shape [batch, time, layers, dim]")
+        return torch.einsum("btld,l->btd", features, self.weights)
 
 
 class CachedBiLSTMCTC(torch.nn.Module):
-    """BiLSTM CTC head shared by continuous and centroid-quantized features."""
+    """Serializable cached-feature CTC model supporting all deep-dive heads."""
 
     def __init__(self, config: CachedCTCConfig) -> None:
         super().__init__()
         self.config = config
         self.dropout = torch.nn.Dropout(config.dropout)
-        self.lstm = torch.nn.LSTM(
-            input_size=config.input_size,
-            hidden_size=config.hidden_size,
-            num_layers=config.num_layers,
-            dropout=config.dropout if config.num_layers > 1 else 0.0,
-            batch_first=True,
-            bidirectional=True,
+        input_size = config.input_size
+        self.embedding = None
+        if config.unit_embedding_dim is not None:
+            if config.codebook_size is None:
+                raise ValueError("Unit embedding requires codebook_size")
+            self.embedding = torch.nn.Embedding(
+                config.codebook_size, config.unit_embedding_dim
+            )
+            input_size = config.unit_embedding_dim
+        self.layer_mixture = (
+            LayerScalarMixture(len(config.layer_indices))
+            if config.layer_indices is not None
+            else None
         )
-        self.projection = torch.nn.Linear(
-            2 * config.hidden_size, config.vocab_size
-        )
+        head_type = config.head_type
+        if head_type == "linear":
+            self.head = torch.nn.Linear(input_size, config.vocab_size)
+        elif head_type == "mlp":
+            self.head = torch.nn.Sequential(
+                torch.nn.Linear(input_size, config.mlp_hidden_size),
+                torch.nn.GELU(),
+                torch.nn.Dropout(config.dropout),
+                torch.nn.Linear(config.mlp_hidden_size, config.vocab_size),
+            )
+        elif head_type == "bilstm":
+            self.lstm = torch.nn.LSTM(
+                input_size=input_size,
+                hidden_size=config.hidden_size,
+                num_layers=config.num_layers,
+                dropout=config.dropout if config.num_layers > 1 else 0.0,
+                batch_first=True,
+                bidirectional=True,
+            )
+            self.head = torch.nn.Linear(2 * config.hidden_size, config.vocab_size)
+        elif head_type == "transformer":
+            self.input_projection = torch.nn.Linear(input_size, config.transformer_dim)
+            block = torch.nn.TransformerEncoderLayer(
+                d_model=config.transformer_dim,
+                nhead=config.num_attention_heads,
+                dim_feedforward=4 * config.transformer_dim,
+                dropout=config.dropout,
+                activation="gelu",
+                batch_first=True,
+                norm_first=True,
+            )
+            self.transformer = torch.nn.TransformerEncoder(block, config.num_layers)
+            self.head = torch.nn.Linear(config.transformer_dim, config.vocab_size)
+        else:
+            raise ValueError(f"Unsupported head_type: {head_type}")
 
     def forward(
         self, features: torch.Tensor, lengths: torch.Tensor
     ) -> torch.Tensor:
-        """Return padded logits while excluding padding from both LSTM directions."""
-        packed = pack_padded_sequence(
-            self.dropout(features),
-            lengths.detach().cpu(),
-            batch_first=True,
-            enforce_sorted=False,
+        """Return padded logits, masking padding for sequence heads."""
+        if self.embedding is not None:
+            features = self.embedding(features.long())
+        if self.layer_mixture is not None:
+            features = self.layer_mixture(features)
+        features = self.dropout(features)
+        if self.config.head_type in {"linear", "mlp"}:
+            return self.head(features)
+        if self.config.head_type == "bilstm":
+            packed = pack_padded_sequence(
+                features, lengths.detach().cpu(), batch_first=True, enforce_sorted=False
+            )
+            packed_output, _ = self.lstm(packed)
+            hidden_states, _ = pad_packed_sequence(
+                packed_output, batch_first=True, total_length=features.shape[1]
+            )
+            return self.head(self.dropout(hidden_states))
+        positions = torch.arange(features.shape[1], device=features.device)
+        padding_mask = positions.unsqueeze(0) >= lengths.to(features.device).unsqueeze(1)
+        hidden_states = self.transformer(
+            self.input_projection(features), src_key_padding_mask=padding_mask
         )
-        packed_output, _ = self.lstm(packed)
-        hidden_states, _ = pad_packed_sequence(
-            packed_output,
-            batch_first=True,
-            total_length=features.shape[1],
-        )
-        return self.projection(self.dropout(hidden_states))
+        return self.head(self.dropout(hidden_states))
 
     def save_pretrained(self, output_dir: str | Path) -> None:
         output_dir = Path(output_dir)
@@ -87,17 +159,21 @@ class CachedBiLSTMCTC(torch.nn.Module):
         map_location: str | torch.device = "cpu",
     ) -> "CachedBiLSTMCTC":
         model_dir = Path(model_dir)
-        config = CachedCTCConfig(
-            **json.loads((model_dir / "config.json").read_text(encoding="utf-8"))
+        raw_config = json.loads(
+            (model_dir / "config.json").read_text(encoding="utf-8")
         )
+        config = CachedCTCConfig(**raw_config)
         model = cls(config)
-        model.load_state_dict(
-            torch.load(
-                model_dir / "model.pt",
-                map_location=map_location,
-                weights_only=True,
-            )
+        state = torch.load(
+            model_dir / "model.pt",
+            map_location=map_location,
+            weights_only=True,
         )
+        # E10/E11 checkpoints predate the generic head abstraction.
+        if "projection.weight" in state and "head.weight" not in state:
+            state["head.weight"] = state.pop("projection.weight")
+            state["head.bias"] = state.pop("projection.bias")
+        model.load_state_dict(state)
         return model
 
 
@@ -141,13 +217,15 @@ class CachedSequenceDataset(torch.utils.data.Dataset):
         metadata_path: str | Path,
         tokenizer: Any,
         centroids: np.ndarray | None = None,
+        discrete_embedding: bool = False,
     ) -> None:
         self.metadata_path = Path(metadata_path)
         self.rows = read_cached_metadata(self.metadata_path)
         self.tokenizer = tokenizer
         self.centroids = centroids
+        self.discrete_embedding = discrete_embedding
         representations = {str(row["representation"]) for row in self.rows}
-        expected = "discrete" if centroids is not None else "continuous"
+        expected = "discrete" if centroids is not None or discrete_embedding else "continuous"
         if representations != {expected}:
             raise ValueError(
                 f"{self.metadata_path}: expected {expected} metadata, "
@@ -163,19 +241,24 @@ class CachedSequenceDataset(torch.utils.data.Dataset):
             self.metadata_path, str(row["array_path"])
         )
         array = np.load(array_path, allow_pickle=False)
-        if self.centroids is not None:
+        if self.centroids is not None or self.discrete_embedding:
             if array.ndim != 1:
                 raise ValueError(f"Expected unit IDs in {array_path}, got {array.shape}")
             if array.size and (array.min() < 0 or array.max() >= len(self.centroids)):
                 raise ValueError(f"Unit ID outside codebook range in {array_path}")
-            features = self.centroids[array.astype(np.int64, copy=False)]
+            unit_ids = array.astype(np.int64, copy=False)
+            features = (
+                unit_ids if self.discrete_embedding else self.centroids[unit_ids]
+            )
         else:
             if array.ndim != 2:
                 raise ValueError(
                     f"Expected continuous features in {array_path}, got {array.shape}"
                 )
             features = array
-        features = np.asarray(features, dtype=np.float32)
+        features = np.asarray(
+            features, dtype=np.int64 if self.discrete_embedding else np.float32
+        )
         labels = self.tokenizer(
             normalize_text(str(row["text"])),
             add_special_tokens=False,
@@ -196,6 +279,36 @@ class CachedSequenceDataset(torch.utils.data.Dataset):
             "audio_path": str(row["audio_path"]),
             "duration": float(row["duration"]),
         }
+
+
+class CachedLayerMixtureDataset(CachedSequenceDataset):
+    """Join aligned per-layer caches without duplicating feature storage."""
+
+    def __init__(self, metadata_paths: list[str | Path], tokenizer: Any) -> None:
+        if not metadata_paths:
+            raise ValueError("At least one layer metadata path is required")
+        super().__init__(metadata_paths[0], tokenizer)
+        self.layer_metadata_paths = [Path(path) for path in metadata_paths]
+        self.layer_rows = [read_cached_metadata(path) for path in self.layer_metadata_paths]
+        reference_ids = [str(row["id"]) for row in self.layer_rows[0]]
+        for path, rows in zip(self.layer_metadata_paths[1:], self.layer_rows[1:]):
+            if [str(row["id"]) for row in rows] != reference_ids:
+                raise ValueError(f"Utterance alignment mismatch in {path}")
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        item = super().__getitem__(index)
+        arrays = []
+        for path, rows in zip(self.layer_metadata_paths, self.layer_rows):
+            array_path = resolve_cached_array(path, str(rows[index]["array_path"]))
+            arrays.append(np.load(array_path, allow_pickle=False))
+        shapes = {array.shape for array in arrays}
+        if len(shapes) != 1:
+            raise ValueError(f"Layer frame shape mismatch for {item['id']}: {shapes}")
+        # [time, layers, dimension], allowing the standard time-padding collator.
+        item["features"] = torch.from_numpy(
+            np.stack(arrays, axis=1).astype(np.float32, copy=False)
+        )
+        return item
 
 
 def collate_cached_sequences(items: list[dict[str, Any]]) -> dict[str, Any]:
@@ -271,6 +384,8 @@ def unit_stream_statistics(
         "unit_entropy_bits": raw_entropy,
         "unit_bitrate_bps": token_rate * raw_entropy,
         "unit_fixed_bitrate_bps": token_rate
+        * math.ceil(math.log2(codebook_size)),
+        "unit_fixed_width_bitrate_bps": token_rate
         * math.ceil(math.log2(codebook_size)),
         "unit_dedup_tokens": dedup_tokens,
         "unit_dedup_token_rate": dedup_token_rate,

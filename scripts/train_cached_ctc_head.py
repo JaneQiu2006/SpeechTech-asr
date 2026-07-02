@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -16,13 +18,21 @@ import torch
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from ssl_asr.metrics import append_metrics, compute_error_rates, save_predictions
+from ssl_asr.metrics import (
+    append_metrics,
+    atomic_write_json,
+    compute_error_rates,
+    save_predictions,
+)
 from ssl_asr.representations import (
     CachedBiLSTMCTC,
     CachedCTCConfig,
+    CachedLayerMixtureDataset,
     CachedSequenceDataset,
     collate_cached_sequences,
     read_cached_metadata,
+    resolve_cached_array,
+    unit_stream_statistics,
 )
 
 
@@ -32,12 +42,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train_metadata", type=Path, required=True)
     parser.add_argument("--eval_metadata", type=Path, required=True)
     parser.add_argument("--centers", type=Path)
+    parser.add_argument(
+        "--representation_type",
+        choices=["continuous", "discrete_centroid", "discrete_embedding", "layer_mixture"],
+    )
+    parser.add_argument(
+        "--layer_metadata", type=Path, nargs="+",
+        help="Aligned layer metadata files for learned scalar mixture.",
+    )
+    parser.add_argument(
+        "--head_type", choices=["linear", "mlp", "bilstm", "transformer"],
+        default="bilstm",
+    )
     parser.add_argument("--vocab_path", type=Path, default=PROJECT_ROOT / "data/vocab/vocab.json")
     parser.add_argument("--output_dir", type=Path, required=True)
     parser.add_argument("--prediction_path", type=Path, required=True)
     parser.add_argument("--metrics_path", type=Path, default=PROJECT_ROOT / "results/metrics.csv")
     parser.add_argument("--hidden_size", type=int, default=256)
-    parser.add_argument("--num_layers", type=int, default=2)
+    parser.add_argument("--num_layers", "--num_lstm_layers", type=int, default=2)
+    parser.add_argument("--mlp_hidden_size", type=int, default=512)
+    parser.add_argument("--transformer_dim", type=int, default=256)
+    parser.add_argument("--num_transformer_layers", type=int)
+    parser.add_argument("--num_attention_heads", type=int, default=4)
+    parser.add_argument("--unit_embedding_dim", type=int, default=256)
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
@@ -53,6 +80,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--disable_cudnn", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--skip_existing", action="store_true")
     return parser.parse_args()
 
 
@@ -77,6 +106,7 @@ def evaluate(
     references: list[str] = []
     predictions: list[str] = []
     records: list[dict[str, Any]] = []
+    started = time.perf_counter()
     with torch.inference_mode():
         for batch in loader:
             features = batch["features"].to(device, non_blocking=True)
@@ -111,7 +141,19 @@ def evaluate(
     rates["non_empty_ratio"] = sum(bool(item.strip()) for item in predictions) / len(
         predictions
     )
+    audio_seconds = sum(float(record["duration"]) for record in records)
+    rates["rtf"] = (time.perf_counter() - started) / audio_seconds
     return rates, records
+
+
+def git_revision() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=PROJECT_ROOT, text=True, stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
 
 
 def scheduler_factor(step: int, warmup_steps: int, max_steps: int) -> float:
@@ -148,6 +190,12 @@ def save_training_state(
 
 def main() -> None:
     args = parse_args()
+    completion_path = args.output_dir / "completion.json"
+    if completion_path.is_file() and (args.skip_existing or args.resume) and not args.overwrite:
+        print(f"[skip] completed experiment: {args.output_dir}", flush=True)
+        return
+    if args.overwrite:
+        args.resume = False
     if args.max_steps <= 0 or args.eval_steps <= 0:
         raise ValueError("--max_steps and --eval_steps must be positive")
     if args.batch_size <= 0 or args.gradient_accumulation_steps <= 0:
@@ -168,26 +216,45 @@ def main() -> None:
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
 
-    if args.output_dir.exists() and not args.resume:
+    if args.output_dir.exists() and not args.resume and not args.overwrite:
         raise FileExistsError(
             f"Output exists: {args.output_dir}; pass --resume to continue"
         )
-    if args.prediction_path.exists() and not args.resume:
+    if args.prediction_path.exists() and not args.resume and not args.overwrite:
         raise FileExistsError(f"Prediction already exists: {args.prediction_path}")
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     tokenizer = build_tokenizer(args.vocab_path)
+    representation_type = args.representation_type or (
+        "discrete_centroid" if args.centers else "continuous"
+    )
+    if representation_type == "layer_mixture" and not args.layer_metadata:
+        raise ValueError("--layer_metadata is required for layer_mixture")
+    if representation_type == "discrete_centroid" and not args.centers:
+        raise ValueError("--centers is required for discrete_centroid")
     centers = (
         np.load(args.centers, allow_pickle=False).astype(np.float32, copy=False)
-        if args.centers
+        if args.centers and representation_type == "discrete_centroid"
         else None
     )
-    train_dataset = CachedSequenceDataset(
-        args.train_metadata, tokenizer, centroids=centers
-    )
-    eval_dataset = CachedSequenceDataset(
-        args.eval_metadata, tokenizer, centroids=centers
-    )
+    discrete_embedding = representation_type == "discrete_embedding"
+    if representation_type == "layer_mixture":
+        layer_paths = args.layer_metadata
+        train_paths = [path for path in layer_paths if "train" in path.parts]
+        eval_paths = [path for path in layer_paths if path not in train_paths]
+        if not train_paths or not eval_paths:
+            raise ValueError("--layer_metadata must contain train and eval metadata paths")
+        train_dataset = CachedLayerMixtureDataset(train_paths, tokenizer)
+        eval_dataset = CachedLayerMixtureDataset(eval_paths, tokenizer)
+    else:
+        train_dataset = CachedSequenceDataset(
+            args.train_metadata, tokenizer, centroids=centers,
+            discrete_embedding=discrete_embedding,
+        )
+        eval_dataset = CachedSequenceDataset(
+            args.eval_metadata, tokenizer, centroids=centers,
+            discrete_embedding=discrete_embedding,
+        )
     first = train_dataset[0]
     metadata = read_cached_metadata(args.train_metadata)
     source_models = {str(row["source_model"]) for row in metadata}
@@ -198,25 +265,60 @@ def main() -> None:
     source_model = source_models.pop()
     source_layer = source_layers.pop()
     encoder_params = encoder_params_set.pop()
-    representation = "discrete" if centers is not None else "continuous"
+    representation = representation_type
+    codebook_size = None
+    unit_metrics = {}
+    if representation_type.startswith("discrete"):
+        codebook_sizes = {int(row["codebook_size"]) for row in metadata}
+        if len(codebook_sizes) != 1:
+            raise RuntimeError("Discrete metadata mixes codebook sizes")
+        codebook_size = codebook_sizes.pop()
+        unit_metrics = unit_stream_statistics(
+            [
+                np.load(
+                    resolve_cached_array(args.eval_metadata, str(row["array_path"])),
+                    allow_pickle=False,
+                )
+                for row in read_cached_metadata(args.eval_metadata)
+            ],
+            sum(float(row["duration"]) for row in read_cached_metadata(args.eval_metadata)),
+            codebook_size,
+        )
+    layer_indices = None
+    if representation_type == "layer_mixture":
+        layer_indices = [
+            int(read_cached_metadata(path)[0]["source_layer"]) for path in train_paths
+        ]
+    head_layers = (
+        args.num_transformer_layers
+        if args.head_type == "transformer" and args.num_transformer_layers is not None
+        else args.num_layers
+    )
     config = CachedCTCConfig(
-        input_size=int(first["features"].shape[1]),
+        input_size=int(first["features"].shape[-1]),
         hidden_size=args.hidden_size,
-        num_layers=args.num_layers,
+        num_layers=head_layers,
         vocab_size=max(tokenizer.get_vocab().values()) + 1,
         dropout=args.dropout,
         blank_id=tokenizer.pad_token_id,
         source_model=source_model,
         source_layer=source_layer,
         representation=representation,
-        codebook_size=len(centers) if centers is not None else None,
+        codebook_size=codebook_size,
+        head_type=args.head_type,
+        mlp_hidden_size=args.mlp_hidden_size,
+        num_attention_heads=args.num_attention_heads,
+        transformer_dim=args.transformer_dim,
+        unit_embedding_dim=args.unit_embedding_dim if discrete_embedding else None,
+        layer_indices=layer_indices,
     )
     model = CachedBiLSTMCTC(config).to(args.device)
     head_params = sum(parameter.numel() for parameter in model.parameters())
     print(
         f"[startup] experiment={args.experiment}, representation={representation}, "
         f"layer={source_layer}, train={len(train_dataset)}, dev={len(eval_dataset)}, "
-        f"encoder_params={encoder_params:,}, trainable_head_params={head_params:,}",
+        f"head={args.head_type}, git={git_revision()}, encoder_params={encoder_params:,}, "
+        f"trainable_head_params={head_params:,}",
         flush=True,
     )
 
@@ -324,6 +426,7 @@ def main() -> None:
             model.save_pretrained(args.output_dir)
             save_predictions(args.prediction_path, prediction_rows)
             best_summary = {
+                "experiment_id": args.experiment.split("_", 1)[0].upper(),
                 "experiment": args.experiment,
                 "step": step,
                 "best_wer": rates["wer"],
@@ -332,17 +435,27 @@ def main() -> None:
                 "source_model": source_model,
                 "source_layer": source_layer,
                 "representation": representation,
+                "head_type": args.head_type,
+                "layer_weights": (
+                    {
+                        str(layer): float(weight)
+                        for layer, weight in zip(
+                            config.layer_indices,
+                            model.layer_mixture.weights.detach().cpu().tolist(),
+                        )
+                    }
+                    if model.layer_mixture is not None else None
+                ),
                 "codebook_size": config.codebook_size,
                 "encoder_params": encoder_params,
                 "trainable_head_params": head_params,
+                "trainable_params": head_params,
                 "total_system_params": encoder_params + head_params,
+                "trainable_ratio": head_params / (encoder_params + head_params),
+                "rtf": rates["rtf"],
+                "git_revision": git_revision(),
             }
-            summary_path = args.output_dir / "summary.json"
-            temporary_summary = summary_path.with_suffix(".json.tmp")
-            temporary_summary.write_text(
-                json.dumps(best_summary, indent=2) + "\n", encoding="utf-8"
-            )
-            temporary_summary.replace(summary_path)
+            atomic_write_json(args.output_dir / "summary.json", best_summary)
         collapse_count = (
             collapse_count + 1
             if rates["non_empty_ratio"] < args.collapse_non_empty_threshold
@@ -379,12 +492,26 @@ def main() -> None:
             "experiment": args.experiment,
             "split": "dev_clean",
             "model": f"{source_model}:layer{source_layer}:{representation}",
+            "representation": representation,
+            "source_layer": source_layer,
+            "head_type": args.head_type,
+            "seed": args.seed,
             "freeze_encoder": True,
             "num_samples": len(eval_dataset),
+            "effective_hours": sum(
+                float(row["duration"]) for row in read_cached_metadata(args.train_metadata)
+            ) / 3600,
             "wer": final_rates["wer"],
             "cer": final_rates["cer"],
+            "substitutions": final_rates["substitutions"],
+            "deletions": final_rates["deletions"],
+            "insertions": final_rates["insertions"],
+            "exact_match": final_rates["exact_match"],
             "total_params": encoder_params + head_params,
             "trainable_params": head_params,
+            "trainable_ratio": head_params / (encoder_params + head_params),
+            "rtf": final_rates["rtf"],
+            **unit_metrics,
         },
     )
     completion = {
@@ -394,12 +521,7 @@ def main() -> None:
         "best_wer": final_rates["wer"],
         "best_cer": final_rates["cer"],
     }
-    completion_path = args.output_dir / "completion.json"
-    temporary_completion = completion_path.with_suffix(".json.tmp")
-    temporary_completion.write_text(
-        json.dumps(completion, indent=2) + "\n", encoding="utf-8"
-    )
-    temporary_completion.replace(completion_path)
+    atomic_write_json(completion_path, completion)
     print(
         f"[complete] WER={final_rates['wer']:.5f}, "
         f"CER={final_rates['cer']:.5f}, model={args.output_dir}",

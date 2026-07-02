@@ -1,4 +1,5 @@
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
@@ -9,6 +10,7 @@ torch = pytest.importorskip("torch")
 from ssl_asr.representations import (
     CachedBiLSTMCTC,
     CachedCTCConfig,
+    LayerScalarMixture,
     CachedSequenceDataset,
     collate_cached_sequences,
     unit_stream_statistics,
@@ -110,6 +112,64 @@ def test_unit_stream_statistics_reports_raw_and_deduplicated_rates():
     assert statistics["unit_token_rate"] == 2.5
     assert statistics["unit_dedup_tokens"] == 4
     assert statistics["unit_dedup_token_rate"] == 2.0
+
+
+@pytest.mark.parametrize("head_type", ["linear", "mlp", "bilstm", "transformer"])
+def test_cached_ctc_heads_preserve_batch_and_time_dimensions(head_type):
+    config = CachedCTCConfig(
+        input_size=8, hidden_size=4, num_layers=1, vocab_size=5, dropout=0.0,
+        blank_id=4, source_model="test", source_layer=9,
+        representation="continuous", head_type=head_type,
+        transformer_dim=8, num_attention_heads=2,
+    )
+    logits = CachedBiLSTMCTC(config)(
+        torch.randn(2, 4, 8), torch.tensor([4, 2])
+    )
+    assert logits.shape == (2, 4, 5)
+
+
+def test_layer_scalar_mixture_is_normalized_and_differentiable():
+    mixture = LayerScalarMixture(3)
+    features = torch.randn(2, 4, 3, 5)
+    output = mixture(features)
+    assert output.shape == (2, 4, 5)
+    torch.testing.assert_close(mixture.weights.sum(), torch.tensor(1.0))
+    output.sum().backward()
+    assert mixture.scalar_parameters.grad is not None
+
+
+def test_discrete_embedding_head_accepts_unit_ids():
+    config = CachedCTCConfig(
+        input_size=1, hidden_size=3, num_layers=1, vocab_size=4, dropout=0.0,
+        blank_id=3, source_model="test", source_layer=9,
+        representation="discrete_embedding", codebook_size=10,
+        unit_embedding_dim=6,
+    )
+    model = CachedBiLSTMCTC(config)
+    logits = model(torch.tensor([[1, 2, 3], [4, 5, 0]]), torch.tensor([3, 2]))
+    assert logits.shape == (2, 3, 4)
+
+
+def test_old_bilstm_checkpoint_projection_keys_remain_loadable(tmp_path):
+    config = CachedCTCConfig(
+        input_size=2, hidden_size=3, num_layers=1, vocab_size=4, dropout=0.0,
+        blank_id=3, source_model="test", source_layer=9,
+        representation="continuous",
+    )
+    model = CachedBiLSTMCTC(config)
+    state = model.state_dict()
+    state["projection.weight"] = state.pop("head.weight")
+    state["projection.bias"] = state.pop("head.bias")
+    torch.save(state, tmp_path / "model.pt")
+    old_config = asdict(config)
+    for key in (
+        "head_type", "mlp_hidden_size", "num_attention_heads",
+        "transformer_dim", "unit_embedding_dim", "layer_indices",
+    ):
+        old_config.pop(key)
+    (tmp_path / "config.json").write_text(json.dumps(old_config), encoding="utf-8")
+    loaded = CachedBiLSTMCTC.from_pretrained(tmp_path)
+    torch.testing.assert_close(loaded.head.weight, model.head.weight)
 
 
 def test_select_best_representation_layer(tmp_path):
