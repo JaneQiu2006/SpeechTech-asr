@@ -168,13 +168,6 @@ def main() -> None:
     ):
         print(f"[{args.experiment}] complete metrics exist; skipping", flush=True)
         return
-    if args.prediction_path.exists() and not args.overwrite:
-        raise FileExistsError(
-            f"Prediction exists without complete metrics: {args.prediction_path}"
-        )
-
-    import soundfile as sf
-    from transformers import AutoFeatureExtractor, AutoModel
 
     records = read_jsonl(args.manifest)
     if args.max_samples is not None:
@@ -183,6 +176,57 @@ def main() -> None:
         records = records[: args.max_samples]
     if not records:
         raise RuntimeError("Evaluation manifest is empty")
+    if args.prediction_path.exists() and not args.overwrite:
+        prediction_rows = [
+            json.loads(line)
+            for line in args.prediction_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        required = {"id", "reference", "prediction", "duration", "audio_path"}
+        if (
+            len(prediction_rows) == len(records)
+            and all(required.issubset(row) for row in prediction_rows)
+        ):
+            tokenizer = build_tokenizer(args.vocab_path)
+            references = [normalize_text(str(row["reference"])) for row in prediction_rows]
+            predictions = [normalize_text(str(row["prediction"])) for row in prediction_rows]
+            rates = compute_error_rates(references, predictions)
+            audio_seconds = sum(float(row["duration"]) for row in prediction_rows)
+            config = json.loads(
+                (args.model_dir / "config.json").read_text(encoding="utf-8")
+            )
+            upsert_metric(
+                args.metrics_path,
+                {
+                    "experiment_id": args.experiment.split("_", 1)[0].upper(),
+                    "experiment": args.experiment,
+                    "split": "test_clean",
+                    "representation": config.get("representation", ""),
+                    "source_model": config.get("source_model", args.source_model),
+                    "source_layer": config.get("source_layer", ""),
+                    "codebook_size": config.get("codebook_size") or "",
+                    "num_samples": len(prediction_rows),
+                    "audio_hours": audio_seconds / 3600,
+                    **rates,
+                    **ctc_label_statistics(predictions, tokenizer, audio_seconds),
+                    "recovered_from_predictions": True,
+                },
+            )
+            print(
+                f"[{args.experiment}] recovered test metrics from existing "
+                f"predictions; WER={rates['wer']:.5f}, CER={rates['cer']:.5f}",
+                flush=True,
+            )
+            return
+        print(
+            f"[{args.experiment}] incomplete prediction file; re-running test",
+            flush=True,
+        )
+        args.overwrite = True
+
+    import soundfile as sf
+    from transformers import AutoFeatureExtractor, AutoModel
+
     tokenizer = build_tokenizer(args.vocab_path)
     feature_extractor = AutoFeatureExtractor.from_pretrained(args.source_model)
     encoder = AutoModel.from_pretrained(args.source_model).to(args.device)

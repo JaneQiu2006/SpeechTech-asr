@@ -436,6 +436,31 @@ def main() -> None:
     if completion_path.is_file() and args.skip_existing and not args.overwrite:
         print(f"[skip] completed experiment: {args.output_dir}", flush=True)
         return
+    expected_prediction_path = args.prediction_path or (
+        PROJECT_ROOT / "results/predictions" / f"{args.output_dir.name}_dev.jsonl"
+    )
+    completed_artifacts = (
+        (
+            (args.output_dir / "model.safetensors").is_file()
+            or (args.output_dir / "pytorch_model.bin").is_file()
+        )
+        and (args.output_dir / "config.json").is_file()
+        and expected_prediction_path.is_file()
+    )
+    if args.skip_existing and completed_artifacts and not args.overwrite:
+        atomic_write_json(
+            completion_path,
+            {
+                "completed": True,
+                "experiment_id": args.experiment_id,
+                "recovered_from_existing_artifacts": True,
+            },
+        )
+        print(
+            f"[skip] existing model and dev prediction: {args.output_dir}",
+            flush=True,
+        )
+        return
     if completion_path.is_file() and not args.overwrite:
         raise FileExistsError(f"Completed output exists: {args.output_dir}")
     print("[startup] importing PyTorch and Transformers training dependencies...", flush=True)

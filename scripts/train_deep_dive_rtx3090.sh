@@ -47,7 +47,7 @@ for stage in "${filtered[@]}"; do
     e23) bash scripts/rerun_best_deep_dive_seed.sh ;;
   esac
 done
-"$PYTHON_EXE" scripts/plot_deep_dive_results.py
+run_deep_dive_plots
 echo "===== status ====="
 for directory in exp/deep_dive/*; do
   [[ -d "$directory" ]] || continue

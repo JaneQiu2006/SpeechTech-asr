@@ -38,4 +38,4 @@ for k in "${KS[@]}"; do
   evaluate_cached_experiment "$experiment" "exp/deep_dive/$experiment" \
     "$codebook/centers.npy"
 done
-"$PYTHON_EXE" scripts/plot_deep_dive_results.py
+run_deep_dive_plots

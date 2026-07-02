@@ -194,8 +194,37 @@ def main() -> None:
     if completion_path.is_file() and (args.skip_existing or args.resume) and not args.overwrite:
         print(f"[skip] completed experiment: {args.output_dir}", flush=True)
         return
+    completed_artifacts = (
+        (args.output_dir / "model.pt").is_file()
+        and (args.output_dir / "config.json").is_file()
+        and (args.output_dir / "summary.json").is_file()
+        and args.prediction_path.is_file()
+    )
+    if args.skip_existing and completed_artifacts and not args.overwrite:
+        summary = json.loads(
+            (args.output_dir / "summary.json").read_text(encoding="utf-8")
+        )
+        atomic_write_json(
+            completion_path,
+            {
+                "completed": True,
+                "recovered_from_existing_artifacts": True,
+                "best_wer": summary.get("best_wer", summary.get("dev_wer")),
+                "best_cer": summary.get("best_cer", summary.get("dev_cer")),
+            },
+        )
+        print(
+            f"[skip] existing model, summary, and dev prediction: {args.output_dir}",
+            flush=True,
+        )
+        return
     if args.overwrite:
         args.resume = False
+    elif args.skip_existing and (
+        args.output_dir.exists() or args.prediction_path.exists()
+    ):
+        args.resume = True
+        print(f"[resume] partial artifacts found: {args.output_dir}", flush=True)
     if args.max_steps <= 0 or args.eval_steps <= 0:
         raise ValueError("--max_steps and --eval_steps must be positive")
     if args.batch_size <= 0 or args.gradient_accumulation_steps <= 0:

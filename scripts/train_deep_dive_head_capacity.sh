@@ -26,4 +26,4 @@ for spec in "${heads[@]}"; do
     2>&1 | tee -a "logs/deep_dive/${experiment}.log"
   evaluate_cached_experiment "$experiment" "exp/deep_dive/$experiment"
 done
-"$PYTHON_EXE" scripts/plot_deep_dive_results.py
+run_deep_dive_plots

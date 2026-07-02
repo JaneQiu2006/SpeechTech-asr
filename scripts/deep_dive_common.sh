@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 # Shared train-then-test helpers. Source this file; do not execute it directly.
 
+run_deep_dive_plots() {
+  echo "===== Updating deep-dive figures ====="
+  if ! "$PYTHON_EXE" scripts/plot_deep_dive_results.py; then
+    echo "[warning] Plot generation failed; training results are preserved." >&2
+    echo "[warning] Install requirements-rtx3090.txt and rerun the plotting script later." >&2
+  fi
+  return 0
+}
+
 evaluate_cached_experiment() {
   local experiment="$1"
   local model_dir="$2"

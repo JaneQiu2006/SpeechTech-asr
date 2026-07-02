@@ -14,7 +14,13 @@ param(
 
     [string]$LocalProjectRoot,
 
-    [switch]$IncludeTrainingState
+    [switch]$IncludeTrainingState,
+
+    [switch]$AnalysisOnly,
+
+    [switch]$OverwriteExisting,
+
+    [switch]$ListOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -57,7 +63,7 @@ $temporaryKeyInstalled = $false
 # Enumerate all regular files once. Missing optional directories are ignored.
 $remoteListCommand = @'
 cd '__REMOTE_ROOT__' || exit 1
-for directory in exp results logs artifacts/kmeans; do
+for directory in exp results logs artifacts/kmeans artifacts/deep_dive configs/deep_dive; do
     if [ -d "$directory" ]; then
         find "$directory" -type f -print
     fi
@@ -181,6 +187,68 @@ fi
             throw "Unsafe relative path returned by remote host: $relativePath"
         }
 
+        if ($AnalysisOnly) {
+            # Strict allowlist for post-training analysis. In particular this
+            # excludes model.pt, *.safetensors, *.bin, checkpoints, feature
+            # caches, K-means centers and serialized K-means models.
+            $analysisName = [System.IO.Path]::GetFileName($relativePath)
+            $analysisExtension = [System.IO.Path]::GetExtension(
+                $relativePath
+            ).ToLowerInvariant()
+            if (
+                $relativePath.Contains("/checkpoint-") -or
+                $analysisExtension -in @(
+                    ".pt", ".pth", ".bin", ".safetensors", ".joblib",
+                    ".npy", ".npz", ".ckpt"
+                )
+            ) {
+                continue
+            }
+
+            if (
+                $relativePath.StartsWith("results/") -or
+                $relativePath.StartsWith("logs/") -or
+                $relativePath.StartsWith("configs/deep_dive/")
+            ) {
+                $relativePath
+                continue
+            }
+
+            if ($relativePath.StartsWith("exp/deep_dive/")) {
+                if (
+                    $analysisName -in @(
+                        "summary.json",
+                        "completion.json",
+                        "config.json",
+                        "trainer_state.json"
+                    )
+                ) {
+                    $relativePath
+                }
+                continue
+            }
+
+            if ($relativePath.StartsWith("artifacts/deep_dive/")) {
+                if (
+                    $analysisExtension -in @(
+                        ".json", ".jsonl", ".csv", ".txt", ".yaml", ".yml", ".md"
+                    )
+                ) {
+                    $relativePath
+                }
+                continue
+            }
+
+            if ($relativePath.StartsWith("artifacts/kmeans/")) {
+                if ($analysisName -in @("summary.json", "best_layer.txt")) {
+                    $relativePath
+                }
+                continue
+            }
+
+            continue
+        }
+
         if ($relativePath.StartsWith("results/") -or $relativePath.StartsWith("logs/")) {
             $relativePath
             continue
@@ -220,13 +288,23 @@ fi
         exit 0
     }
 
+    if ($ListOnly) {
+        Write-Host "Selected remote files (no download requested):"
+        $selectedFiles | ForEach-Object { Write-Host "  $_" }
+        Write-Host "Total: $($selectedFiles.Count)"
+        exit 0
+    }
+
     $downloaded = 0
     $skipped = 0
     $failed = 0
 
     foreach ($relativePath in $selectedFiles) {
         $localPath = Join-Path $localRoot ($relativePath.Replace("/", [System.IO.Path]::DirectorySeparatorChar))
-        if (Test-Path -LiteralPath $localPath -PathType Leaf) {
+        if (
+            (Test-Path -LiteralPath $localPath -PathType Leaf) -and
+            -not $OverwriteExisting
+        ) {
             Write-Host "[skip] $relativePath"
             $skipped++
             continue
@@ -240,15 +318,17 @@ fi
         $remotePath = "$RemoteProjectRoot/$relativePath"
         $remoteSpec = "${target}:$remotePath"
         Write-Host "[get ] $relativePath"
-        & scp @scpArgs $remoteSpec $localPath
+        $temporaryLocalPath = "$localPath.download-$PID"
+        & scp @scpArgs $remoteSpec $temporaryLocalPath
         if ($LASTEXITCODE -eq 0) {
+            Move-Item -LiteralPath $temporaryLocalPath -Destination $localPath -Force
             $downloaded++
         }
         else {
             Write-Warning "Failed to download $relativePath (scp exit code $LASTEXITCODE)."
             $failed++
-            if (Test-Path -LiteralPath $localPath -PathType Leaf) {
-                Remove-Item -LiteralPath $localPath -Force
+            if (Test-Path -LiteralPath $temporaryLocalPath -PathType Leaf) {
+                Remove-Item -LiteralPath $temporaryLocalPath -Force
             }
         }
     }

@@ -37,4 +37,4 @@ done
 "$PYTHON_EXE" scripts/select_best_representation_layer.py \
   --summary_glob "exp/deep_dive/e13_layer*_bilstm_ctc/summary.json" \
   --out artifacts/deep_dive/best_layer_e13.txt
-"$PYTHON_EXE" scripts/plot_deep_dive_results.py
+run_deep_dive_plots
