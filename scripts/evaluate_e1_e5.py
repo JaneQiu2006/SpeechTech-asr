@@ -162,6 +162,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch_size", type=int, default=2)
     parser.add_argument("--device", default="cuda")
     parser.add_argument(
+        "--disable_cudnn",
+        action="store_true",
+        help="Use native CUDA kernels if the host cuDNN runtime is broken.",
+    )
+    parser.add_argument(
         "--overwrite",
         action="store_true",
         help="Re-evaluate even if a complete test result already exists.",
@@ -370,6 +375,9 @@ def evaluate(
         raise FileNotFoundError(f"Processor directory not found: {experiment.processor_dir}")
     if args.device.startswith("cuda") and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but PyTorch cannot access a CUDA device")
+    if args.disable_cudnn:
+        torch.backends.cudnn.enabled = False
+        print("[startup] cuDNN disabled; using native CUDA kernels", flush=True)
 
     print(f"[{experiment.id}] checkpoint={model_dir}", flush=True)
     processor = AutoProcessor.from_pretrained(

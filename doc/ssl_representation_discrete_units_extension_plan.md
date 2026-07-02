@@ -622,6 +622,7 @@ WER/CER ↔ trainable parameters ↔ RTF ↔ bitrate
 | `scripts/evaluate_representation_ctc.py` | 连续/离散系统完整 test-clean 与端到端 RTF |
 | `scripts/train_representation_extension_rtx3090.sh` | 额外一天服务器队列 |
 | `scripts/test_representation_extension.ps1` | 本地 RTX 4060 测试入口 |
+| `scripts/test_e5_e12_linux.sh` | Linux/CUDA 上统一测试 E5–E12 |
 
 E10d learned layer mixture、E12b 和 E13 仍属于时间充足时的可选实验，当前
 队列不会自动执行。
@@ -718,3 +719,34 @@ exp/wav2vec2_layer*_bilstm_ctc/*
 exp/wav2vec2_discrete_k*_bilstm_ctc/*
 logs/*_rtx3090.log
 ```
+
+### 11.5 Linux 统一评测
+
+当 E5–E12 模型和 E11 codebook 全部位于服务器项目目录后运行：
+
+```bash
+bash scripts/test_e5_e12_linux.sh
+```
+
+显存不足时：
+
+```bash
+bash scripts/test_e5_e12_linux.sh --batch-size 1
+```
+
+需要强制覆盖已有完整 test 结果时：
+
+```bash
+bash scripts/test_e5_e12_linux.sh --overwrite
+```
+
+脚本按以下顺序评估：
+
+```text
+E5 → E6a → E6b → E8 → E9 → E12a
+→ E10 layer 6/9/12
+→ E11 K=50/100/200
+```
+
+E7 按既定决策跳过。脚本会自动执行 cuDNN Conv1d 预检；失败时对两类评估器
+统一传入 `--disable_cudnn`，且退出前删除临时 preflight 文件。

@@ -409,3 +409,5 @@ checkpoint 与训练日志尚未同步。
 - 真实 LibriSpeech 单样本的 layer 6/9/12 提取与连续端到端评估通过；
   基础回归测试为 11 passed、1 skipped（基础 Python 环境未安装 torch），
   torch 相关路径已在 `ssl_asr` 环境中单独验证。
+- 新增 Linux 统一测试入口 `scripts/test_e5_e12_linux.sh`，依次评估
+  E5、E6a/E6b、E8、E9、E12a、E10a–c 和 E11a–c；E7 明确跳过。
