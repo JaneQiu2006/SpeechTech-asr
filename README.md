@@ -1,21 +1,32 @@
 # Low-resource ASR with self-supervised speech representations
 
-This repository contains the startup implementation described in
-`doc/ssl_low_resource_asr_project_plan.md`: reproducible LibriSpeech subsets
-and a minimal Wav2Vec2/WavLM CTC training pipeline.
+本项目在 LibriSpeech 上研究低资源条件下的自监督语音表征，包括 Wav2Vec2/WavLM
+全量与部分微调、冻结层 probing、下游 CTC head、连续/离散表示及数据规模消融。
+训练使用字符级 CTC；dev-clean 用于模型选择，test-clean 仅用于最终评测。
 
-## 1. Environment
+## 1. 环境
 
-Python 3.10 is recommended. Install a CUDA-compatible PyTorch build first,
-then install the remaining dependencies:
+完整实验以 Linux、Python 3.10、单张 24 GB RTX 3090 为基准：
 
-```powershell
+```bash
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## 2. Data preparation
+检查代码与环境：
 
-Put extracted LibriSpeech directories directly below `data/`:
+```bash
+python -m pytest -q
+python -c "import torch; print(torch.__version__, torch.cuda.get_device_name(0))"
+```
+
+训练脚本首次运行会从 Hugging Face 下载
+`facebook/wav2vec2-base`、`microsoft/wavlm-base` 等预训练权重。
+
+## 2. 数据准备
+
+将解压后的 LibriSpeech 放在：
 
 ```text
 data/
@@ -24,189 +35,127 @@ data/
 └── test-clean/
 ```
 
-The preparation script always checks these local directories first. If a
-split is absent, it downloads that split from
-`openslr/librispeech_asr` on Hugging Face and materializes it below `data/`.
+生成固定随机种子（42）的 manifest、30 类字符词表以及过滤后累计时长的 1h/3h
+子集：
 
-```powershell
-python scripts/prepare_librispeech_subsets.py
+```bash
+python scripts/prepare_librispeech_subsets.py --local_only
+python scripts/prepare_librispeech_subsets.py --local_only \
+  --splits train-clean-100 --target_hours 1 3 \
+  --max_train_duration_in_seconds 15 --subset_suffix effective_15s
 ```
 
-Outputs:
+若本地数据不完整，去掉 `--local_only`，脚本将自动下载。关键输出为：
 
 ```text
-data/manifests/train_1h.jsonl
-data/manifests/train_10h.jsonl
+data/manifests/train_1h_effective_15s.jsonl   # 约 1.001 h
+data/manifests/train_3h_effective_15s.jsonl   # 约 3.001 h
+data/manifests/train_10h.jsonl                # 训练时过滤后约 6.392 h
 data/manifests/dev_clean.jsonl
 data/manifests/test_clean.jsonl
 data/vocab/vocab.json
 ```
 
-For a local-only data check that never starts a download:
+所有正式训练限制音频长度为 15 秒，因此结果中报告有效时长，而非 manifest
+名称中的名义时长。若音频不在项目的 `data/` 下，启动时设置
+`DATA_ROOT=/absolute/path/to/data`。
 
-```powershell
-python scripts/prepare_librispeech_subsets.py --splits dev-clean test-clean --local_only
+## 3. 复现实验
+
+以下命令均从项目根目录执行。脚本会做 CUDA/cuDNN 预检、写入独立日志，并拒绝
+覆盖已有正式产物；中断后应先检查对应的 `exp/`、`logs/` 和 prediction 文件。
+
+### 3.1 主实验 E1–E9
+
+```bash
+# E2、修复后的 E3、E4
+bash scripts/train_e2_e4_rtx3090.sh e2
+
+# 公平冻结基线、E5、部分微调、masking 和在线 frozen BiLSTM
+bash scripts/train_new_experiments_rtx3090.sh \
+  e1-30 e5 e6a e6b e8 e9
 ```
 
-## 3. Startup debug training
+E7（HuBERT）按最终实验方案跳过。E9 是保留的数值塌缩实验，不应作为 frozen
+encoder 的性能上限。
 
-The first run downloads the self-supervised checkpoint
-`facebook/wav2vec2-base`. This is the pretraining-only checkpoint, not the
-ASR-finetuned `-960h` model.
+### 3.2 表征与离散单元 E10–E12
 
-```powershell
-python scripts/train_ctc.py `
-  --train_manifest data/manifests/train_1h.jsonl `
-  --eval_manifest data/manifests/dev_clean.jsonl `
-  --output_dir exp/debug_wav2vec2 `
-  --max_train_samples 200 `
-  --max_eval_samples 100 `
-  --num_train_epochs 1 `
-  --per_device_train_batch_size 1 `
-  --gradient_accumulation_steps 8
+```bash
+bash scripts/train_representation_extension_rtx3090.sh e10 e11 e12a
+bash scripts/test_e5_e12_linux.sh
 ```
 
-Add `--fp16` on a CUDA GPU. Use `--freeze_encoder` for the frozen SSL
-baseline; without it, only the convolutional feature encoder is frozen.
-Evaluation writes JSONL predictions and appends a row to
-`results/metrics.csv`.
+该阶段提取 Wav2Vec2 隐层特征，训练冻结表征的 BiLSTM-CTC head，并仅用训练帧
+拟合 K-means。缓存位于 `features/`，codebook 位于 `artifacts/kmeans/`。
 
-## 4. Frozen 10h baseline (E1)
+评测 E1–E4：
 
-After the debug run succeeds, launch the first formal experiment:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/train_wav2vec2_frozen_10h.ps1
+```bash
+python scripts/evaluate_e1_e5.py \
+  --experiments E1 E2 E3 E4 \
+  --manifest data/manifests/test_clean.jsonl \
+  --metrics_path results/test_metrics.csv \
+  --predictions_dir results/predictions
 ```
 
-The corresponding reproducibility record is
-`configs/wav2vec2_frozen_10h.yaml`. The script freezes every parameter except
-the CTC projection head.
+### 3.3 深挖实验 E13–E23
 
-## 5. Fine-tuned 10h main experiment (E2)
-
-E2 trains the Transformer encoder and CTC head while keeping only the
-convolutional feature encoder frozen. Launch it in the `ssl_asr` environment:
-
-```powershell
-conda activate ssl_asr
-powershell -ExecutionPolicy Bypass -File scripts/train_wav2vec2_finetune_10h.ps1
+```bash
+bash scripts/train_deep_dive_rtx3090.sh all e22 e23
 ```
 
-The script refuses to overwrite an existing
-`exp/wav2vec2_finetune_10h` directory. Its settings are recorded in
-`configs/wav2vec2_finetune_10h.yaml`. The corrected E2 schedule uses 30
-epochs, a `1e-4` learning rate, 10% warmup, and weight decay 0.005; the
-original 3-epoch schedule was insufficient for the randomly initialized CTC
-head to leave its collapsed-output phase.
+该队列完成完整 layer-wise probing、层融合、head 容量、top-k 部分微调、更大
+codebook、离散 embedding、数据规模交互、错误分析、masking 小网格和第二随机
+种子。每个训练实验保存 dev/test prediction、`summary.json` 和
+`completion.json`。
 
-## 6. Fine-tuned 1h low-resource experiment (E3)
+### 3.4 严格对照、第二种子与统计分析 E24–E25
 
-The original E3 collapsed because its nominal 1h manifest contained only
-0.591h after the 15-second training filter. Generate a nested manifest whose
-duration is accumulated after filtering:
-
-```powershell
-python scripts/prepare_librispeech_subsets.py --local_only --splits train-clean-100 --target_hours 1 --max_train_duration_in_seconds 15 --subset_suffix effective_15s
+```bash
+bash scripts/run_all_followup_experiments_rtx3090.sh
 ```
 
-The repaired E3 trains on one effective hour. It uses a `1e-4` CTC-head
-learning rate, a `2e-5` encoder learning rate, delays encoder updates for 100
-steps, disables masking, reloads the best dev-WER checkpoint, and stops after
-eight consecutive near-empty evaluations:
+该脚本完成 30 类词表下的连续/centroid/embedding 对照、top-5 第二种子，并
+运行 10,000 次配对 bootstrap、错误分析、master table 构建和作图。若训练已
+完成而只需重建分析：
 
-```powershell
-conda activate ssl_asr
-powershell -ExecutionPolicy Bypass -File scripts/train_wav2vec2_finetune_1h.ps1
+```bash
+bash scripts/run_all_followup_experiments_rtx3090.sh --from analysis
 ```
 
-The script refuses to overwrite `exp/wav2vec2_finetune_1h_repaired`, so the
-collapsed run is retained for diagnosis. Its complete
-settings are in `configs/wav2vec2_finetune_1h.yaml`.
+## 4. 输出与结果核验
 
-## 7. WavLM 10h model comparison (E4)
-
-E4 replaces only the self-supervised encoder with `microsoft/wavlm-base`.
-It otherwise matches corrected E2: the 10h subset, 15-second duration limit,
-CNN-only freeze, 30 epochs, and the same optimizer and memory settings.
-
-```powershell
-conda activate ssl_asr
-powershell -ExecutionPolicy Bypass -File scripts/train_wavlm_finetune_10h.ps1
-```
-
-## 8. Remaining-GPU experiment queue (E1-30, E3r, E5-E9)
-
-Generate the effective 3h subset used by E5:
-
-```powershell
-python scripts/prepare_librispeech_subsets.py --local_only --splits train-clean-100 --target_hours 3 --max_train_duration_in_seconds 15 --subset_suffix effective_15s
-```
-
-On the RTX 3090 server, the default command first runs the fair 30-epoch
-frozen baseline, then repaired E3, followed by E5-E9:
+主要产物：
 
 ```text
-E1-30 → E3r → E5 → E6a → E6b → E7 → E8 → E9
+exp/                                  模型、配置、checkpoint
+features/                             FP16 隐层特征缓存
+artifacts/kmeans/                     K-means codebook 与统计
+results/predictions/                  逐句预测
+results/master_metrics.csv            统一复算后的主结果表
+results/followup_paired_bootstrap.csv 配对 bootstrap 结果
+results/deep_dive_error_analysis.md   错误分析
+results/figures/                      论文图
+logs/                                 训练与评测日志
 ```
+
+可单独重建汇总与图：
 
 ```bash
-bash scripts/train_new_experiments_rtx3090.sh
+python scripts/build_master_results.py --output results/master_metrics.csv
+python scripts/plot_deep_dive_results.py
 ```
 
-Experiments can also be selected explicitly:
+在相同数据、seed 和配置下，`test-clean` 的关键核验值如下（四舍五入）：
 
-```bash
-bash scripts/train_new_experiments_rtx3090.sh e5
-bash scripts/train_new_experiments_rtx3090.sh e1-30
-bash scripts/train_new_experiments_rtx3090.sh e6a e6b
-bash scripts/train_new_experiments_rtx3090.sh e7
-bash scripts/train_new_experiments_rtx3090.sh e8
-bash scripts/train_new_experiments_rtx3090.sh e9
-bash scripts/train_new_experiments_rtx3090.sh e3r
-```
+| 设置 | Test WER |
+|---|---:|
+| Wav2Vec2 full fine-tuning，6.392h（E2） | 11.44% |
+| Wav2Vec2 + masking，6.392h（E8） | 11.35% |
+| top-5 partial fine-tuning（E16B） | 12.62% |
+| frozen layer 8 + 2-layer BiLSTM（E13） | 19.51% |
+| layer 8 centroid units，K=1000（E24D） | 33.08% |
+| 1h full fine-tuning / frozen layer 8 | 40.51% / 31.63% |
 
-E6a/E6b freeze the bottom 6/9 Transformer blocks. E7 uses HuBERT-base,
-E8 adds feature masking to the default time masking, and E9 trains a
-two-layer BiLSTM CTC head over a frozen Wav2Vec2 encoder. E9 intentionally
-uses FP32 because the CUDA FP16 LSTM startup check produced NaN loss.
-All launchers refuse to overwrite an existing output, prediction, or log.
-
-The first run downloads `microsoft/wavlm-base`. The script refuses to
-overwrite `exp/wavlm_finetune_10h`; reproducibility settings are in
-`configs/wavlm_finetune_10h.yaml`.
-
-## 8. RTX 3090 Linux migration
-
-After activating the `ssl_asr` environment on a 24GB RTX 3090 server, the
-script now starts at E4 by default because E2 and E3 are complete:
-
-```bash
-bash scripts/train_e2_e4_rtx3090.sh
-```
-
-To explicitly rerun from E2 or E3:
-
-```bash
-bash scripts/train_e2_e4_rtx3090.sh e2
-bash scripts/train_e2_e4_rtx3090.sh e3
-```
-
-The script uses train/eval batch size 2 with gradient accumulation 8 for
-E2/E3. E4 uses batch size 1 with gradient accumulation 16 because WavLM and
-the native-CUDA convolution fallback have a higher memory peak. All three
-retain an effective batch size of 16 and use zero data-loader workers. The
-script enables expandable CUDA allocator segments, writes one log per
-experiment below `logs/`, and
-refuses to overwrite existing experiment directories or prediction files.
-Migrated Windows manifest paths are automatically relocated below the current
-project's `data/` directory. If audio is elsewhere on the server, set
-`DATA_ROOT=/path/to/data` when launching the script.
-The server script also runs a real cuDNN Conv1d preflight. If the rented
-host's cuDNN runtime cannot initialize, it automatically passes
-`--disable_cudnn` and verifies the native CUDA Conv1d fallback before training.
-
-For a clean RTX 3090 environment, install the official PyTorch CUDA wheel
-first, then use `requirements-rtx3090.txt`. Do not install the
-`datasets[audio]` extra in this environment: current major versions can pull
-TorchCodec and replace the selected PyTorch CUDA build.
+E8 与 E2 的差异无统计显著性；小幅数值差异不应视为稳定提升。

@@ -1,8 +1,0 @@
-system,effective_hours,wer,experiment
-full_finetune,6.392,0.11438679245283019,E2
-full_finetune,1.001,0.4050707547169811,E3
-full_finetune,3.001,0.17119978697504565,E5
-frozen_bilstm,1.0014472052777772,0.30627522604793794,e20a_1h_layer8_bilstm_ctc
-frozen_bilstm,1.001,0.31630401704199634,E20A
-frozen_bilstm,3.001049896388891,0.22327448194998759,e20b_3h_layer8_bilstm_ctc
-frozen_bilstm,3.001,0.2362484783931832,E20B

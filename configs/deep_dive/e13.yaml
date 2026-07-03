@@ -1,5 +1,0 @@
-experiment: E13
-layers: [1, 2, 3, 4, 5, 7, 8, 10, 11]
-head_type: bilstm
-num_layers: 2
-seed: 42

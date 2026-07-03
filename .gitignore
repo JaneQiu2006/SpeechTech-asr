@@ -1,23 +1,15 @@
 __pycache__/
-
 .pytest_cache/
 .venv/
 
-# Large/reproducible artifacts
 data/
-data/**/*.flac
-data/**/*.tar.gz
-data/**/*.crdownload
-data/manifests/*.jsonl
-data/vocab/*.json
 exp/
 features/
-artifacts/kmeans/
-results/predictions/
-results/metrics.csv
+artifacts/
 results/
-
-
 logs/
+report/
+doc/
+configs/
+
 *.log
-"build/" 

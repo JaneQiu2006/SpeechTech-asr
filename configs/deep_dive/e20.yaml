@@ -1,5 +1,0 @@
-experiment: E20
-effective_train_sets: [1h, 3h]
-fallback_layer: 9
-head_type: bilstm
-seed: 42

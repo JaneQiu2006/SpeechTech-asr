@@ -1,5 +1,0 @@
-experiment: E15
-head_types: [linear, mlp, bilstm_1, bilstm_2]
-optional_head_types: [transformer]
-fallback_layer: 9
-seed: 42

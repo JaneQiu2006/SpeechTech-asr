@@ -58,13 +58,9 @@ mkdir -p exp/deep_dive logs/deep_dive results/predictions/deep_dive results/figu
 
 required=(
   data/manifests/train_10h.jsonl
-  data/manifests/train_1h_effective_15s.jsonl
   data/manifests/dev_clean.jsonl
   data/manifests/test_clean.jsonl
   data/vocab/vocab.json
-  results/predictions/wav2vec2_finetune_1h_repaired_test.jsonl
-  results/predictions/deep_dive/e20a_1h_layer8_bilstm_ctc_test.jsonl
-  results/predictions/deep_dive/e16b_top5_finetune_test.jsonl
 )
 for path in "${required[@]}"; do
   [[ -s "$path" ]] || { echo "Missing required input: $path" >&2; exit 1; }
@@ -89,36 +85,59 @@ for index in "${!stages[@]}"; do
       bash scripts/train_followup_second_seed.sh
       ;;
     analysis)
-      comparisons=(
-        e24_vocab30_continuous
-        results/predictions/deep_dive/e13_layer8_bilstm_ctc_test.jsonl
-        results/predictions/deep_dive/e24a_layer8_continuous_vocab30_test.jsonl
-        e24_k200_centroid_vs_embedding
-        results/predictions/deep_dive/e24b_layer8_k200_centroid_vocab30_test.jsonl
-        results/predictions/deep_dive/e24c_layer8_k200_embedding_vocab30_test.jsonl
-        e24_k200_centroid_vs_embedding768
-        results/predictions/deep_dive/e24b_layer8_k200_centroid_vocab30_test.jsonl
-        results/predictions/deep_dive/e24e_layer8_k200_embedding768_vocab30_test.jsonl
-        e24_k200_vs_k1000_centroid
-        results/predictions/deep_dive/e24b_layer8_k200_centroid_vocab30_test.jsonl
-        results/predictions/deep_dive/e24d_layer8_k1000_centroid_vocab30_test.jsonl
-        e16b_seed42_vs_seed1234
-        results/predictions/deep_dive/e16b_top5_finetune_test.jsonl
-        results/predictions/deep_dive/e25_top5_finetune_seed1234_test.jsonl
-        one_hour_full_ft_vs_frozen
-        results/predictions/wav2vec2_finetune_1h_repaired_test.jsonl
-        results/predictions/deep_dive/e20a_1h_layer8_bilstm_ctc_test.jsonl
-      )
       comparison_args=()
-      for ((i=0; i<${#comparisons[@]}; i+=3)); do
-        for path in "${comparisons[$((i+1))]}" "${comparisons[$((i+2))]}"; do
-          [[ -s "$path" ]] || { echo "Missing bootstrap prediction: $path" >&2; exit 1; }
-        done
-        comparison_args+=(
-          --comparison "${comparisons[$i]}" \
-          "${comparisons[$((i+1))]}" "${comparisons[$((i+2))]}"
-        )
-      done
+      add_comparison_if_available() {
+        local name="$1"
+        local system_a="$2"
+        local system_b="$3"
+        if [[ -s "$system_a" && -s "$system_b" ]]; then
+          comparison_args+=(--comparison "$name" "$system_a" "$system_b")
+        else
+          echo "[warning] skipping bootstrap '$name'; missing input:" >&2
+          [[ -s "$system_a" ]] || echo "  $system_a" >&2
+          [[ -s "$system_b" ]] || echo "  $system_b" >&2
+        fi
+      }
+      add_comparison_if_available \
+        e24_vocab30_continuous \
+        results/predictions/deep_dive/e13_layer8_bilstm_ctc_test.jsonl \
+        results/predictions/deep_dive/e24a_layer8_continuous_vocab30_test.jsonl
+      add_comparison_if_available \
+        e24_k200_centroid_vs_embedding \
+        results/predictions/deep_dive/e24b_layer8_k200_centroid_vocab30_test.jsonl \
+        results/predictions/deep_dive/e24c_layer8_k200_embedding_vocab30_test.jsonl
+      add_comparison_if_available \
+        e24_k200_centroid_vs_embedding768 \
+        results/predictions/deep_dive/e24b_layer8_k200_centroid_vocab30_test.jsonl \
+        results/predictions/deep_dive/e24e_layer8_k200_embedding768_vocab30_test.jsonl
+      add_comparison_if_available \
+        e24_k200_vs_k1000_centroid \
+        results/predictions/deep_dive/e24b_layer8_k200_centroid_vocab30_test.jsonl \
+        results/predictions/deep_dive/e24d_layer8_k1000_centroid_vocab30_test.jsonl
+      add_comparison_if_available \
+        e16b_seed42_vs_seed1234 \
+        results/predictions/deep_dive/e16b_top5_finetune_test.jsonl \
+        results/predictions/deep_dive/e25_top5_finetune_seed1234_test.jsonl
+      add_comparison_if_available \
+        one_hour_full_ft_vs_frozen \
+        results/predictions/wav2vec2_finetune_1h_repaired_test.jsonl \
+        results/predictions/deep_dive/e20a_1h_layer8_bilstm_ctc_test.jsonl
+      add_comparison_if_available \
+        embedding32_vs_30 \
+        results/predictions/deep_dive/e18_k200_embedding_bilstm_ctc_test.jsonl \
+        results/predictions/deep_dive/e24c_layer8_k200_embedding_vocab30_test.jsonl
+      add_comparison_if_available \
+        k1000_32_vs_30 \
+        results/predictions/deep_dive/e17_k1000_centroid_bilstm_ctc_test.jsonl \
+        results/predictions/deep_dive/e24d_layer8_k1000_centroid_vocab30_test.jsonl
+      add_comparison_if_available \
+        embedding256_vs_768 \
+        results/predictions/deep_dive/e24c_layer8_k200_embedding_vocab30_test.jsonl \
+        results/predictions/deep_dive/e24e_layer8_k200_embedding768_vocab30_test.jsonl
+      if [[ ${#comparison_args[@]} -eq 0 ]]; then
+        echo "No complete prediction pairs are available for bootstrap." >&2
+        exit 1
+      fi
       "$PYTHON_EXE" -u scripts/paired_bootstrap_asr.py \
         "${comparison_args[@]}" --samples 10000 --seed 42 \
         --output_csv results/followup_paired_bootstrap.csv \
