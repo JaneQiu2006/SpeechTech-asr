@@ -1,0 +1,4 @@
+system,effective_hours,wer,experiment
+full_finetune,6.392,0.11438679245283019,E2
+full_finetune,1.001,0.4050707547169811,E3
+full_finetune,3.001,0.17119978697504565,E5

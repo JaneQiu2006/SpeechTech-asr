@@ -144,6 +144,42 @@ def main() -> None:
         )
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
+    summary_path = args.output_dir / "summary.json"
+    centers_path = args.output_dir / "centers.npy"
+    model_path = args.output_dir / "kmeans.joblib"
+    cached_metadata = (
+        args.output_dir / "train/metadata.jsonl",
+        args.output_dir / "dev/metadata.jsonl",
+    )
+    if (
+        args.resume
+        and summary_path.is_file()
+        and centers_path.is_file()
+        and model_path.is_file()
+        and all(path.is_file() for path in cached_metadata)
+    ):
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        if int(summary.get("codebook_size", -1)) != args.codebook_size:
+            raise RuntimeError("Existing codebook size does not match arguments")
+        expected_sources = (
+            args.train_metadata.resolve(),
+            args.eval_metadata.resolve(),
+        )
+        recorded_sources = (
+            Path(str(summary["train_metadata"])).resolve(),
+            Path(str(summary["eval_metadata"])).resolve(),
+        )
+        if recorded_sources != expected_sources:
+            raise RuntimeError(
+                "Existing K-means cache was built from different metadata"
+            )
+        print(
+            f"[skip] complete K-means and unit caches already exist: "
+            f"{args.output_dir}",
+            flush=True,
+        )
+        return
+
     try:
         from sklearn.cluster import MiniBatchKMeans
     except ImportError as error:
@@ -151,8 +187,6 @@ def main() -> None:
             "Install scikit-learn to train discrete-unit codebooks"
         ) from error
 
-    centers_path = args.output_dir / "centers.npy"
-    model_path = args.output_dir / "kmeans.joblib"
     if centers_path.is_file() and model_path.is_file():
         if not args.resume:
             raise FileExistsError(f"Codebook already exists: {args.output_dir}")
@@ -216,7 +250,6 @@ def main() -> None:
         "max_fit_frames": args.max_fit_frames,
         "splits": summaries,
     }
-    summary_path = args.output_dir / "summary.json"
     temporary_summary = summary_path.with_suffix(".json.tmp")
     temporary_summary.write_text(
         json.dumps(summary, indent=2) + "\n", encoding="utf-8"

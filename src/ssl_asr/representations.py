@@ -224,6 +224,7 @@ class CachedSequenceDataset(torch.utils.data.Dataset):
         self.tokenizer = tokenizer
         self.centroids = centroids
         self.discrete_embedding = discrete_embedding
+        self.codebook_size: int | None = None
         representations = {str(row["representation"]) for row in self.rows}
         expected = "discrete" if centroids is not None or discrete_embedding else "continuous"
         if representations != {expected}:
@@ -231,6 +232,22 @@ class CachedSequenceDataset(torch.utils.data.Dataset):
                 f"{self.metadata_path}: expected {expected} metadata, "
                 f"found {sorted(representations)}"
             )
+        if centroids is not None:
+            self.codebook_size = len(centroids)
+        elif discrete_embedding:
+            codebook_sizes = {
+                int(row["codebook_size"])
+                for row in self.rows
+                if row.get("codebook_size") is not None
+            }
+            if len(codebook_sizes) != 1:
+                raise ValueError(
+                    f"{self.metadata_path}: embedding metadata must contain "
+                    "one consistent codebook_size"
+                )
+            self.codebook_size = codebook_sizes.pop()
+        if self.codebook_size is not None and self.codebook_size <= 1:
+            raise ValueError("codebook_size must be greater than one")
 
     def __len__(self) -> int:
         return len(self.rows)
@@ -244,7 +261,9 @@ class CachedSequenceDataset(torch.utils.data.Dataset):
         if self.centroids is not None or self.discrete_embedding:
             if array.ndim != 1:
                 raise ValueError(f"Expected unit IDs in {array_path}, got {array.shape}")
-            if array.size and (array.min() < 0 or array.max() >= len(self.centroids)):
+            if array.size and (
+                array.min() < 0 or array.max() >= int(self.codebook_size)
+            ):
                 raise ValueError(f"Unit ID outside codebook range in {array_path}")
             unit_ids = array.astype(np.int64, copy=False)
             features = (

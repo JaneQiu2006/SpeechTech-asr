@@ -42,6 +42,8 @@ def _write_metadata(path: Path, representation: str, array_name: str) -> None:
         "source_layer": 6,
         "encoder_params": 10,
     }
+    if representation == "discrete":
+        row["codebook_size"] = 2
     path.write_text(json.dumps(row) + "\n", encoding="utf-8")
 
 
@@ -148,6 +150,32 @@ def test_discrete_embedding_head_accepts_unit_ids():
     model = CachedBiLSTMCTC(config)
     logits = model(torch.tensor([[1, 2, 3], [4, 5, 0]]), torch.tensor([3, 2]))
     assert logits.shape == (2, 3, 4)
+
+
+def test_discrete_embedding_dataset_uses_metadata_codebook_size(tmp_path):
+    units = np.array([0, 1, 0], dtype=np.uint8)
+    np.save(tmp_path / "units.npy", units)
+    metadata = tmp_path / "metadata.jsonl"
+    _write_metadata(metadata, "discrete", "units.npy")
+
+    item = CachedSequenceDataset(
+        metadata, _Tokenizer(), discrete_embedding=True
+    )[0]
+
+    assert item["features"].dtype == torch.int64
+    assert item["features"].tolist() == [0, 1, 0]
+
+
+def test_discrete_embedding_dataset_rejects_out_of_range_ids(tmp_path):
+    np.save(tmp_path / "units.npy", np.array([0, 2, 0], dtype=np.uint8))
+    metadata = tmp_path / "metadata.jsonl"
+    _write_metadata(metadata, "discrete", "units.npy")
+
+    dataset = CachedSequenceDataset(
+        metadata, _Tokenizer(), discrete_embedding=True
+    )
+    with pytest.raises(ValueError, match="outside codebook range"):
+        dataset[0]
 
 
 def test_old_bilstm_checkpoint_projection_keys_remain_loadable(tmp_path):

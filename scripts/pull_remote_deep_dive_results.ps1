@@ -8,6 +8,18 @@ includes results, predictions, figures, logs, deep-dive configs, summaries,
 completion markers, and Trainer log history. It excludes checkpoints, model
 weights, optimizer state, feature caches, K-means centers, and joblib files.
 
+IdentityFile is optional. When it is omitted, the helper asks for the remote
+account password exactly once, installs a restricted ephemeral public key,
+uses it for all SSH/SCP operations, and removes it from authorized_keys when
+the transfer finishes.
+
+.EXAMPLE
+# Password-once mode: do not pass IdentityFile.
+.\scripts\pull_remote_deep_dive_results.ps1 `
+  -HostName 203.0.113.10 `
+  -UserName root `
+  -RemoteProjectRoot /root/workspace/SpeechTech-asr
+
 .EXAMPLE
 .\scripts\pull_remote_deep_dive_results.ps1 `
   -HostName 203.0.113.10 `
@@ -74,4 +86,13 @@ if ($LocalProjectRoot) {
 
 Write-Host "Pulling lightweight post-training artifacts only."
 Write-Host "Model checkpoints, weights, feature caches, and K-means binaries are excluded."
+if ($IdentityFile) {
+    Write-Host "Authentication: existing SSH identity file."
+}
+else {
+    Write-Host (
+        "Authentication: password once, followed by an automatically removed " +
+        "restricted temporary key."
+    )
+}
 & $syncScript @syncArguments
