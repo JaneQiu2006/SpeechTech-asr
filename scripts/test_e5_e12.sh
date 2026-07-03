@@ -5,9 +5,9 @@ set -euo pipefail
 # E7 is intentionally skipped. Existing complete metrics are reused.
 #
 # Usage:
-#   bash scripts/test_e5_e12_linux.sh
-#   bash scripts/test_e5_e12_linux.sh --batch-size 1
-#   bash scripts/test_e5_e12_linux.sh --overwrite
+#   bash scripts/test_e5_e12.sh
+#   bash scripts/test_e5_e12.sh --batch-size 1
+#   bash scripts/test_e5_e12.sh --overwrite
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"

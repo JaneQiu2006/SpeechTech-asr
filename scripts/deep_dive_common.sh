@@ -5,7 +5,7 @@ run_deep_dive_plots() {
   echo "===== Updating deep-dive figures ====="
   if ! "$PYTHON_EXE" scripts/plot_deep_dive_results.py; then
     echo "[warning] Plot generation failed; training results are preserved." >&2
-    echo "[warning] Install requirements-rtx3090.txt and rerun the plotting script later." >&2
+    echo "[warning] Install requirements.txt and rerun the plotting script later." >&2
   fi
   return 0
 }

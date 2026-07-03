@@ -2,9 +2,9 @@
 # Run every experiment proposed in section 14 of the comprehensive analysis.
 #
 # Usage:
-#   bash scripts/run_all_followup_experiments_rtx3090.sh
-#   bash scripts/run_all_followup_experiments_rtx3090.sh --from seed
-#   bash scripts/run_all_followup_experiments_rtx3090.sh --overwrite
+#   bash scripts/run_all_followup_experiments.sh
+#   bash scripts/run_all_followup_experiments.sh --from seed
+#   bash scripts/run_all_followup_experiments.sh --overwrite
 #
 # Environment overrides:
 #   PYTHON_EXE=/path/to/python

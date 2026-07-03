@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Sequential RTX 3090 commands for E2, E3, and E4.
+# Sequential Linux/CUDA commands for E2, E3, and E4.
 #
 # Usage:
 #   conda activate ssl_asr
-#   bash scripts/train_e2_e4_rtx3090.sh  # E4 only; E2 and E3 are complete
+#   bash scripts/train_e2_e4.sh  # E4 only; E2 and E3 are complete
 #
 # Explicitly rerun from an earlier experiment if needed:
-#   bash scripts/train_e2_e4_rtx3090.sh e2
-#   bash scripts/train_e2_e4_rtx3090.sh e3
+#   bash scripts/train_e2_e4.sh e2
+#   bash scripts/train_e2_e4.sh e3
 #
 # Override Python if needed:
-#   PYTHON_EXE=/path/to/python bash scripts/train_e2_e4_rtx3090.sh
+#   PYTHON_EXE=/path/to/python bash scripts/train_e2_e4.sh
 #
 # If LibriSpeech is stored outside the project:
-#   DATA_ROOT=/path/to/data bash scripts/train_e2_e4_rtx3090.sh
+#   DATA_ROOT=/path/to/data bash scripts/train_e2_e4.sh
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
@@ -85,7 +85,7 @@ run_e2() {
     --fp16 \
     --gradient_checkpointing \
     "${CUDNN_ARGS[@]}" \
-    2>&1 | tee logs/wav2vec2_finetune_10h_rtx3090.log
+    2>&1 | tee logs/wav2vec2_finetune_10h.log
 }
 
 run_e3() {
@@ -125,7 +125,7 @@ run_e3() {
     --fp16 \
     --gradient_checkpointing \
     "${CUDNN_ARGS[@]}" \
-    2>&1 | tee logs/wav2vec2_finetune_1h_rtx3090.log
+    2>&1 | tee logs/wav2vec2_finetune_1h.log
 }
 
 run_e4() {
@@ -156,7 +156,7 @@ run_e4() {
     --fp16 \
     --gradient_checkpointing \
     "${CUDNN_ARGS[@]}" \
-    2>&1 | tee logs/wavlm_finetune_10h_rtx3090.log
+    2>&1 | tee logs/wavlm_finetune_10h.log
 }
 
 require_file scripts/train_ctc.py

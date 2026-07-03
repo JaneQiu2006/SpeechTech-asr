@@ -5,11 +5,11 @@ set -euo pipefail
 # With no arguments, run fair E1-30, repaired E3, then the new experiments:
 # E1-30, E3r, E5, E6a, E6b, E7, E8, E9.
 # Examples:
-#   bash scripts/train_new_experiments_rtx3090.sh
-#   bash scripts/train_new_experiments_rtx3090.sh e5
-#   bash scripts/train_new_experiments_rtx3090.sh e7 e8
-#   bash scripts/train_new_experiments_rtx3090.sh e3r
-#   bash scripts/train_new_experiments_rtx3090.sh e1-30
+#   bash scripts/train_new_experiments.sh
+#   bash scripts/train_new_experiments.sh e5
+#   bash scripts/train_new_experiments.sh e7 e8
+#   bash scripts/train_new_experiments.sh e3r
+#   bash scripts/train_new_experiments.sh e1-30
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
@@ -216,7 +216,7 @@ run_experiment() {
     # detects and protects the other's artifacts.
     log_path="logs/wav2vec2_frozen_10h_fair_30ep.log"
   else
-    log_path="logs/$(basename "$output_dir")_rtx3090.log"
+    log_path="logs/$(basename "$output_dir").log"
   fi
   if [[ -e "$output_dir" || -e "$prediction_path" || -e "$log_path" ]]; then
     echo "Refusing to overwrite artifacts for $experiment:" >&2

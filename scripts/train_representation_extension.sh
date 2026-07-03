@@ -4,7 +4,7 @@ set -euo pipefail
 # Extra-day queue from doc/ssl_representation_discrete_units_extension_plan.md.
 # Default: E8 -> E9 -> E10a/b/c -> select best layer -> E11 K=50/100/200 -> E12a.
 # Individual stages are also supported:
-#   bash scripts/train_representation_extension_rtx3090.sh e10 e11
+#   bash scripts/train_representation_extension.sh e10 e11
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
@@ -94,7 +94,7 @@ run_existing_experiment() {
     echo "  $prediction" >&2
     exit 1
   fi
-  bash scripts/train_new_experiments_rtx3090.sh "$id"
+  bash scripts/train_new_experiments.sh "$id"
 }
 
 run_cached_head() {
@@ -104,7 +104,7 @@ run_cached_head() {
   local centers="${4:-}"
   local output_dir="exp/$experiment"
   local prediction="results/predictions/${experiment}_dev.jsonl"
-  local log="logs/${experiment}_rtx3090.log"
+  local log="logs/${experiment}.log"
   if [[ -f "$output_dir/completion.json" && -f "$prediction" ]]; then
     echo "===== $experiment already complete; skipping ====="
     return
@@ -160,7 +160,7 @@ if stage_requested e10; then
     --batch_size "$FEATURE_BATCH_SIZE" \
     --resume \
     "${CUDNN_ARGS[@]}" \
-    2>&1 | tee -a logs/wav2vec2_feature_extraction_rtx3090.log
+    2>&1 | tee -a logs/wav2vec2_feature_extraction.log
 
   echo "===== Extracting frozen Wav2Vec2 dev features ====="
   "$PYTHON_EXE" -u scripts/extract_ssl_features.py \
@@ -173,7 +173,7 @@ if stage_requested e10; then
     --batch_size "$FEATURE_BATCH_SIZE" \
     --resume \
     "${CUDNN_ARGS[@]}" \
-    2>&1 | tee -a logs/wav2vec2_feature_extraction_rtx3090.log
+    2>&1 | tee -a logs/wav2vec2_feature_extraction.log
 
   for layer in 6 9 12; do
     run_cached_head \
@@ -213,7 +213,7 @@ if stage_requested e11; then
       --max_fit_frames 500000 \
       --seed 42 \
       --resume \
-      2>&1 | tee -a "logs/wav2vec2_kmeans_k${codebook_size}_rtx3090.log"
+      2>&1 | tee -a "logs/wav2vec2_kmeans_k${codebook_size}.log"
 
     run_cached_head \
       "wav2vec2_discrete_k${codebook_size}_bilstm_ctc" \
@@ -226,7 +226,7 @@ fi
 if stage_requested e12a; then
   output_dir="exp/wav2vec2_finetune_1h_time_mask"
   prediction="results/predictions/wav2vec2_finetune_1h_time_mask_dev.jsonl"
-  log="logs/wav2vec2_finetune_1h_time_mask_rtx3090.log"
+  log="logs/wav2vec2_finetune_1h_time_mask.log"
   if [[ -f "$output_dir/model.safetensors" && -f "$prediction" ]]; then
     echo "===== E12a already complete; skipping ====="
   elif [[ -e "$output_dir" || -e "$prediction" || -e "$log" ]]; then

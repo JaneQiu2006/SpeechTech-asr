@@ -6,7 +6,7 @@
 
 ## 1. 环境
 
-完整实验以 Linux、Python 3.10、单张 24 GB RTX 3090 为基准：
+复现环境为 Linux、Python 3.10 和支持 CUDA 的 NVIDIA GPU：
 
 ```bash
 python -m venv .venv
@@ -69,10 +69,10 @@ data/vocab/vocab.json
 
 ```bash
 # E2、修复后的 E3、E4
-bash scripts/train_e2_e4_rtx3090.sh e2
+bash scripts/train_e2_e4.sh e2
 
 # 公平冻结基线、E5、部分微调、masking 和在线 frozen BiLSTM
-bash scripts/train_new_experiments_rtx3090.sh \
+bash scripts/train_new_experiments.sh \
   e1-30 e5 e6a e6b e8 e9
 ```
 
@@ -82,8 +82,8 @@ encoder 的性能上限。
 ### 3.2 表征与离散单元 E10–E12
 
 ```bash
-bash scripts/train_representation_extension_rtx3090.sh e10 e11 e12a
-bash scripts/test_e5_e12_linux.sh
+bash scripts/train_representation_extension.sh e10 e11 e12a
+bash scripts/test_e5_e12.sh
 ```
 
 该阶段提取 Wav2Vec2 隐层特征，训练冻结表征的 BiLSTM-CTC head，并仅用训练帧
@@ -102,7 +102,7 @@ python scripts/evaluate_e1_e5.py \
 ### 3.3 深挖实验 E13–E23
 
 ```bash
-bash scripts/train_deep_dive_rtx3090.sh all e22 e23
+bash scripts/train_deep_dive.sh all e22 e23
 ```
 
 该队列完成完整 layer-wise probing、层融合、head 容量、top-k 部分微调、更大
@@ -113,7 +113,7 @@ codebook、离散 embedding、数据规模交互、错误分析、masking 小网
 ### 3.4 严格对照、第二种子与统计分析 E24–E25
 
 ```bash
-bash scripts/run_all_followup_experiments_rtx3090.sh
+bash scripts/run_all_followup_experiments.sh
 ```
 
 该脚本完成 30 类词表下的连续/centroid/embedding 对照、top-5 第二种子，并
@@ -121,7 +121,7 @@ bash scripts/run_all_followup_experiments_rtx3090.sh
 完成而只需重建分析：
 
 ```bash
-bash scripts/run_all_followup_experiments_rtx3090.sh --from analysis
+bash scripts/run_all_followup_experiments.sh --from analysis
 ```
 
 ## 4. 输出与结果核验

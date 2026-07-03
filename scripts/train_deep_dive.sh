@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Linux/CUDA deep-dive experiment queue.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
