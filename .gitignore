@@ -15,6 +15,7 @@ features/
 artifacts/kmeans/
 results/predictions/
 results/metrics.csv
+results/
 
 
 logs/
