@@ -14,10 +14,13 @@ evaluate_cached_experiment() {
   local experiment="$1"
   local model_dir="$2"
   local centers="${3:-}"
+  local tokenizer_mode="${4:-auto}"
   local -a center_args=()
   local -a test_policy=()
+  local -a runtime_args=()
   [[ -n "$centers" ]] && center_args=(--centers "$centers")
   [[ "${DEEP_DIVE_OVERWRITE:-0}" == 1 ]] && test_policy=(--overwrite)
+  [[ "${DISABLE_CUDNN:-0}" == 1 ]] && runtime_args=(--disable_cudnn)
   echo "===== Testing $experiment on test-clean ====="
   "$PYTHON_EXE" -u scripts/evaluate_representation_ctc.py \
     --experiment "$experiment" \
@@ -25,8 +28,9 @@ evaluate_cached_experiment() {
     --manifest data/manifests/test_clean.jsonl \
     --prediction_path "results/predictions/deep_dive/${experiment}_test.jsonl" \
     --metrics_path results/deep_dive_metrics.csv \
+    --tokenizer_mode "$tokenizer_mode" \
     --batch_size "${TEST_BATCH_SIZE:-2}" \
-    "${center_args[@]}" "${test_policy[@]}" \
+    "${center_args[@]}" "${test_policy[@]}" "${runtime_args[@]}" \
     2>&1 | tee -a "logs/deep_dive/${experiment}.log"
 }
 
@@ -36,7 +40,9 @@ evaluate_finetune_experiment() {
   local model_dir="$3"
   local frozen_layers="${4:-0}"
   local -a test_policy=()
+  local -a runtime_args=()
   [[ "${DEEP_DIVE_OVERWRITE:-0}" == 1 ]] && test_policy=(--overwrite)
+  [[ "${DISABLE_CUDNN:-0}" == 1 ]] && runtime_args=(--disable_cudnn)
   echo "===== Testing $experiment on test-clean ====="
   "$PYTHON_EXE" -u scripts/evaluate_e1_e5.py \
     --custom_experiment_id "$experiment_id" \
@@ -48,6 +54,6 @@ evaluate_finetune_experiment() {
     --predictions_dir results/predictions/deep_dive \
     --metrics_path results/deep_dive_metrics.csv \
     --batch_size "${TEST_BATCH_SIZE:-2}" \
-    "${test_policy[@]}" \
+    "${test_policy[@]}" "${runtime_args[@]}" \
     2>&1 | tee -a "logs/deep_dive/${experiment}.log"
 }

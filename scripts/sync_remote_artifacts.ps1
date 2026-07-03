@@ -18,6 +18,7 @@ param(
 
     [switch]$AnalysisOnly,
 
+    [Alias("Overwrite")]
     [switch]$OverwriteExisting,
 
     [switch]$ListOnly

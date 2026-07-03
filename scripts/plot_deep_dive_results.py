@@ -88,6 +88,9 @@ def main():
             continue
         with metrics_path.open(encoding="utf-8", newline="") as stream:
             for row in csv.DictReader(stream):
+                normalized_split = row.get("split", "").lower().replace("-", "_")
+                if normalized_split not in {"test", "test_clean"}:
+                    continue
                 label = row.get("experiment_id") or row.get("experiment", "")
                 wer = number(row, "wer")
                 if wer is None:
@@ -103,9 +106,16 @@ def main():
                 ):
                     scale_rows.append(
                         {"system": "full_finetune" if label in baseline_hours else "frozen_bilstm",
-                         "effective_hours": hours, "wer": wer, "experiment": label}
+                         "effective_hours": hours, "wer": wer, "experiment": label,
+                         "split": "test_clean"}
                     )
     if scale_rows:
+        unique_scale_rows = {}
+        for row in scale_rows:
+            unique_scale_rows[
+                (row["system"], row["effective_hours"], row["experiment"], row["split"])
+            ] = row
+        scale_rows = list(unique_scale_rows.values())
         output_csv = Path("results/data_scale_frozen_vs_finetune.csv")
         with output_csv.open("w", encoding="utf-8", newline="") as stream:
             writer = csv.DictWriter(stream, fieldnames=list(scale_rows[0]))

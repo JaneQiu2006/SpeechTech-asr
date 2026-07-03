@@ -30,7 +30,7 @@ the transfer finishes.
   -HostName gpu.example.com `
   -UserName root `
   -RemoteProjectRoot /root/workspace/SpeechTech-asr `
-  -OverwriteExisting
+  -Overwrite
 
 .EXAMPLE
 .\scripts\pull_remote_deep_dive_results.ps1 `
@@ -55,6 +55,7 @@ param(
 
     [string]$LocalProjectRoot,
 
+    [Alias("Overwrite")]
     [switch]$OverwriteExisting,
 
     [switch]$ListOnly

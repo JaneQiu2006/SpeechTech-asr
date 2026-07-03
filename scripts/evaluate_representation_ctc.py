@@ -26,6 +26,7 @@ from ssl_asr.representations import (
     unit_stream_statistics,
 )
 from ssl_asr.text import normalize_text
+from ssl_asr.tokenizer import build_ctc_tokenizer, resolve_tokenizer_mode
 
 FIELDS = (
     "experiment",
@@ -91,18 +92,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no_fp16", action="store_true")
     parser.add_argument("--disable_cudnn", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--tokenizer_mode",
+        choices=["auto", "vocab_only", "legacy_special_tokens"],
+        default="auto",
+        help="Auto matches the saved head; vocab_only enforces the 30-class protocol.",
+    )
     return parser.parse_args()
 
 
-def build_tokenizer(vocab_path: Path):
-    from transformers import Wav2Vec2CTCTokenizer
-
-    return Wav2Vec2CTCTokenizer(
-        str(vocab_path),
-        unk_token="[UNK]",
-        pad_token="[PAD]",
-        word_delimiter_token="|",
+def tokenizer_for_model(vocab_path: Path, mode: str, vocab_size: int):
+    resolved = (
+        resolve_tokenizer_mode(vocab_path, vocab_size)
+        if mode == "auto"
+        else mode
     )
+    tokenizer = build_ctc_tokenizer(vocab_path, resolved)
+    actual_size = max(tokenizer.get_vocab().values()) + 1
+    if actual_size != vocab_size:
+        raise ValueError(
+            f"Tokenizer ID space {actual_size} does not match model vocab_size "
+            f"{vocab_size}; use --tokenizer_mode auto or the matching explicit mode"
+        )
+    return tokenizer, resolved
 
 
 def read_metric_rows(path: Path) -> list[dict[str, str]]:
@@ -187,14 +199,16 @@ def main() -> None:
             len(prediction_rows) == len(records)
             and all(required.issubset(row) for row in prediction_rows)
         ):
-            tokenizer = build_tokenizer(args.vocab_path)
+            config = json.loads(
+                (args.model_dir / "config.json").read_text(encoding="utf-8")
+            )
+            tokenizer, tokenizer_mode = tokenizer_for_model(
+                args.vocab_path, args.tokenizer_mode, int(config["vocab_size"])
+            )
             references = [normalize_text(str(row["reference"])) for row in prediction_rows]
             predictions = [normalize_text(str(row["prediction"])) for row in prediction_rows]
             rates = compute_error_rates(references, predictions)
             audio_seconds = sum(float(row["duration"]) for row in prediction_rows)
-            config = json.loads(
-                (args.model_dir / "config.json").read_text(encoding="utf-8")
-            )
             upsert_metric(
                 args.metrics_path,
                 {
@@ -205,6 +219,8 @@ def main() -> None:
                     "source_model": config.get("source_model", args.source_model),
                     "source_layer": config.get("source_layer", ""),
                     "codebook_size": config.get("codebook_size") or "",
+                    "ctc_vocab_size": config["vocab_size"],
+                    "tokenizer_mode": tokenizer_mode,
                     "num_samples": len(prediction_rows),
                     "audio_hours": audio_seconds / 3600,
                     **rates,
@@ -227,12 +243,14 @@ def main() -> None:
     import soundfile as sf
     from transformers import AutoFeatureExtractor, AutoModel
 
-    tokenizer = build_tokenizer(args.vocab_path)
     feature_extractor = AutoFeatureExtractor.from_pretrained(args.source_model)
     encoder = AutoModel.from_pretrained(args.source_model).to(args.device)
     encoder.eval()
     head = CachedBiLSTMCTC.from_pretrained(args.model_dir).to(args.device)
     head.eval()
+    tokenizer, tokenizer_mode = tokenizer_for_model(
+        args.vocab_path, args.tokenizer_mode, head.config.vocab_size
+    )
     if head.config.source_model != args.source_model:
         raise ValueError("Head source model does not match --source_model")
     centers = None
@@ -361,6 +379,8 @@ def main() -> None:
         "source_model": args.source_model,
         "source_layer": head.config.source_layer,
         "codebook_size": head.config.codebook_size or "",
+        "ctc_vocab_size": head.config.vocab_size,
+        "tokenizer_mode": tokenizer_mode,
         "num_samples": len(records),
         "audio_hours": audio_seconds / 3600,
         **rates,

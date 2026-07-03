@@ -34,6 +34,7 @@ from ssl_asr.representations import (
     resolve_cached_array,
     unit_stream_statistics,
 )
+from ssl_asr.tokenizer import build_ctc_tokenizer
 
 
 def parse_args() -> argparse.Namespace:
@@ -55,6 +56,12 @@ def parse_args() -> argparse.Namespace:
         default="bilstm",
     )
     parser.add_argument("--vocab_path", type=Path, default=PROJECT_ROOT / "data/vocab/vocab.json")
+    parser.add_argument(
+        "--tokenizer_mode",
+        choices=["vocab_only", "legacy_special_tokens"],
+        default="vocab_only",
+        help="Use only vocab.json IDs, or reproduce the legacy bos/eos-expanded head.",
+    )
     parser.add_argument("--output_dir", type=Path, required=True)
     parser.add_argument("--prediction_path", type=Path, required=True)
     parser.add_argument("--metrics_path", type=Path, default=PROJECT_ROOT / "results/metrics.csv")
@@ -83,17 +90,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--skip_existing", action="store_true")
     return parser.parse_args()
-
-
-def build_tokenizer(vocab_path: Path):
-    from transformers import Wav2Vec2CTCTokenizer
-
-    return Wav2Vec2CTCTokenizer(
-        str(vocab_path),
-        unk_token="[UNK]",
-        pad_token="[PAD]",
-        word_delimiter_token="|",
-    )
 
 
 def evaluate(
@@ -253,7 +249,7 @@ def main() -> None:
         raise FileExistsError(f"Prediction already exists: {args.prediction_path}")
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    tokenizer = build_tokenizer(args.vocab_path)
+    tokenizer = build_ctc_tokenizer(args.vocab_path, args.tokenizer_mode)
     representation_type = args.representation_type or (
         "discrete_centroid" if args.centers else "continuous"
     )
@@ -476,6 +472,8 @@ def main() -> None:
                     if model.layer_mixture is not None else None
                 ),
                 "codebook_size": config.codebook_size,
+                "ctc_vocab_size": config.vocab_size,
+                "tokenizer_mode": args.tokenizer_mode,
                 "encoder_params": encoder_params,
                 "trainable_head_params": head_params,
                 "trainable_params": head_params,
@@ -524,6 +522,8 @@ def main() -> None:
             "representation": representation,
             "source_layer": source_layer,
             "head_type": args.head_type,
+            "ctc_vocab_size": config.vocab_size,
+            "tokenizer_mode": args.tokenizer_mode,
             "seed": args.seed,
             "freeze_encoder": True,
             "num_samples": len(eval_dataset),
